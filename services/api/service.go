@@ -314,13 +314,15 @@ func (api *RelayAPI) getRouter() http.Handler {
 }
 
 func (api *RelayAPI) isCapella(slot uint64) bool {
-	epoch := slot / uint64(common.SlotsPerEpoch)
-	return epoch >= api.capellaEpoch
+	// epoch := slot / uint64(common.SlotsPerEpoch)
+	// return epoch >= api.capellaEpoch
+	return false
 }
 
 func (api *RelayAPI) isBellatrix(slot uint64) bool {
-	epoch := slot / uint64(common.SlotsPerEpoch)
-	return epoch >= api.bellatrixEpoch && epoch < api.capellaEpoch
+	// epoch := slot / uint64(common.SlotsPerEpoch)
+	// return epoch >= api.bellatrixEpoch && epoch < api.capellaEpoch
+	return true
 }
 
 // StartServer starts the HTTP server for this instance
@@ -344,19 +346,19 @@ func (api *RelayAPI) StartServer() (err error) {
 	}
 	api.log.Infof("genesis info: %d", api.genesisInfo.Data.GenesisTime)
 
-	forkSchedule, err := api.beaconClient.GetForkSchedule()
-	if err != nil {
-		return err
-	}
+	// forkSchedule, err := api.beaconClient.GetForkSchedule()
+	// if err != nil {
+	// 	return err
+	// }
 
-	for _, fork := range forkSchedule.Data {
-		switch fork.CurrentVersion {
-		case api.opts.EthNetDetails.BellatrixForkVersionHex:
-			api.bellatrixEpoch = fork.Epoch
-		case api.opts.EthNetDetails.CapellaForkVersionHex:
-			api.capellaEpoch = fork.Epoch
-		}
-	}
+	// for _, fork := range forkSchedule.Data {
+	// 	switch fork.CurrentVersion {
+	// 	case api.opts.EthNetDetails.BellatrixForkVersionHex:
+	// 		api.bellatrixEpoch = fork.Epoch
+	// 	case api.opts.EthNetDetails.CapellaForkVersionHex:
+	// 		api.capellaEpoch = fork.Epoch
+	// 	}
+	// }
 
 	currentSlot := bestSyncStatus.HeadSlot
 	currentEpoch := currentSlot / uint64(common.SlotsPerEpoch)
