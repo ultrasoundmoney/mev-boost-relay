@@ -51,6 +51,7 @@ var (
 	ErrServerAlreadyStarted       = errors.New("server was already started")
 	ErrBuilderAPIWithoutSecretKey = errors.New("cannot start builder API without secret key")
 	ErrMismatchedForkVersions     = errors.New("can not find matching fork versions as retrieved from beacon node")
+	ErrMissingForkVersions        = errors.New("invalid bellatrix/capella fork version from beacon node")
 )
 
 var (
@@ -82,6 +83,8 @@ var (
 	apiReadHeaderTimeoutMs = cli.GetEnvInt("API_TIMEOUT_READHEADER_MS", 600)
 	apiWriteTimeoutMs      = cli.GetEnvInt("API_TIMEOUT_WRITE_MS", 10000)
 	apiIdleTimeoutMs       = cli.GetEnvInt("API_TIMEOUT_IDLE_MS", 3000)
+	// forceBellatrix         = os.Getenv("FORCE_BELLATRIX") == "1"
+	forceBellatrix = true // Manually setting to true.
 )
 
 // RelayAPIOpts contains the options for a relay
@@ -314,11 +317,17 @@ func (api *RelayAPI) getRouter() http.Handler {
 }
 
 func (api *RelayAPI) isCapella(slot uint64) bool {
+	if forceBellatrix {
+		return false
+	}
 	epoch := slot / uint64(common.SlotsPerEpoch)
 	return epoch >= api.capellaEpoch
 }
 
 func (api *RelayAPI) isBellatrix(slot uint64) bool {
+	if forceBellatrix {
+		return true
+	}
 	epoch := slot / uint64(common.SlotsPerEpoch)
 	return epoch >= api.bellatrixEpoch && epoch < api.capellaEpoch
 }
@@ -355,6 +364,13 @@ func (api *RelayAPI) StartServer() (err error) {
 			api.bellatrixEpoch = fork.Epoch
 		case api.opts.EthNetDetails.CapellaForkVersionHex:
 			api.capellaEpoch = fork.Epoch
+		}
+	}
+
+	if api.bellatrixEpoch == 0 || api.capellaEpoch == 0 {
+		api.log.Error("no bellatrix/capella fork received from beacon node")
+		if !forceBellatrix { // continue on forceBellatrix
+			return ErrMissingForkVersions
 		}
 	}
 
