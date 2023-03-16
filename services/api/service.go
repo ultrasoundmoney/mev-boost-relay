@@ -557,7 +557,7 @@ func (api *RelayAPI) processNewSlot(headSlot uint64) {
 		go api.updatedExpectedRandao(headSlot)
 
 		// query expected withdrawals root
-		go api.updatedExpectedWithdrawals(headSlot)
+		// go api.updatedExpectedWithdrawals(headSlot)
 
 		// update proposer duties in the background
 		go api.updateProposerDuties(headSlot)
