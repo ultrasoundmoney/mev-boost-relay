@@ -1,4 +1,4 @@
-# Optimistic relaying—builder guide (DRAFT)
+# Optimistic relaying—builder guide
 
 Thank you for your interest in low-latency optimistic relaying with [the ultra sound relay](https://relay.ultrasound.money)! This document is an onboarding guide for you, Ethereum block builder. Please take the time to understand it :)
 
