@@ -372,3 +372,20 @@ func TestGetBlockSubmissionEntry(t *testing.T) {
 	require.True(t, entry.OptimisticSubmission)
 	require.True(t, entry.EligibleAt.Valid)
 }
+
+func TestGetBuilderSubmissions(t *testing.T) {
+	db := resetDatabase(t)
+	pubkey := insertTestBuilder(t, db)
+
+	entries, err := db.GetBuilderSubmissions(GetBuilderSubmissionsFilters{
+		BuilderPubkey: pubkey,
+		Limit:         1,
+	})
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	e := entries[0]
+	require.Equal(t, optimisticSubmission, e.OptimisticSubmission)
+	require.Equal(t, pubkey, e.BuilderPubkey)
+	require.Equal(t, feeRecipient.String(), e.ProposerFeeRecipient)
+	require.Equal(t, fmt.Sprint(collateral), e.Value)
+}
