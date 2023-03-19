@@ -23,7 +23,7 @@ It is clear that opimistic submissions are much faster than non-optimistic submi
 ![img/durations](img/perpubkey.png)
 This figure shows 2 different pubkeys (anonymized). Pubkey a is not in Europe, while Pubkey b is. This demonstates the massive impact on submission duration that continental collocation has. This disparity is much more pronounced in optimistic submissions because they shift the bottleneck to the network latency. Lasly, we examine the per-pubkey mean submission duration before and after optimistic relaying. 
 ![img/table2](img/table2.png)
-This table shows that across the board, optimsitic submission total durations have at least a 1.5x improvement in the mean. Builders who are running in Europe see closer to a 3-4x improvement.
+This table shows that across the board, optimistic submission total durations have at least a 1.5x improvement in the mean.
 
 ### Relay performance
 Reducing the submission durations is great, but it only matters if it impacts the overall performance of the relay. The easiest metric to look at is the percentage of total slots that the ultra sound relay received the winning block. This data is from [Toni Wahrstätter's](https://twitter.com/nero_eth) excellent [mevboost.pics](mevboost.pics) page 
