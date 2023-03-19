@@ -15,22 +15,35 @@ On Friday March 17, 2023 at 12PM UTC, [the ultra sound relay](https://relay.ultr
 ### Block submission durations
 The purpose of optimistic relaying is to reduce the time it takes for a builder to submit a block. We define *total duration* of a submission as the number of microseconds ($\mu s$) between when the message is [received](https://github.com/ultrasoundmoney/mev-boost-relay/blob/a4fe413af1258025f456642305ef222fd5fae89c/services/api/service.go#L1241) and when the bid become [eligible](https://github.com/ultrasoundmoney/mev-boost-relay/blob/a4fe413af1258025f456642305ef222fd5fae89c/services/api/service.go#L1562) to win the auction. By removing block validation from the submission path, we see a dramatic reduction in the total duration.
 
-![img/table1.png](img/table1.png)
+<img src="img/table1.png"  width="800">
+
 We can also compare the distributions of total durations.
-![img/durations](img/durations.png)
+
+<img src="img/durations.png"  width="700">
+
 It is clear that optimistic submissions are much faster than non-optimistic submissions. We are investigating the bimodality of both distributions, and an initial hypothesis is that it may be due to differing locations of various pubkeys. What we do know is that different pubkeys can have very different total duration profiles. We demonstrate this by examining per-pubkey latencies.
-![img/durations](img/perpubkey.png)
+
+<img src="img/perpubkey.png"  width="700">
+
 This figure shows 2 different pubkeys (anonymized). Pubkey a is not in Europe (where ultra sound relay is located), while Pubkey b is. This could provide evidence for the continental collaction theory, but it could also be explained if the pubkeys have very different networking connections to the relay (e.g., pubkey b could have a higher bandwidth connection). Lastly, we examine the per-pubkey mean submission duration before and after optimistic relaying. 
-![img/table2](img/table2.png)
+
+<img src="img/table2.png"  width="700">
+
 This table shows that across the board, optimsitic submission total durations have at least a 1.5x improvement in the mean over non-optimistic submissions.
 
 ### Relay performance
 Reducing the submission durations is great, but it only matters if it impacts the overall performance of the relay. The easiest metric to look at is the percentage of total slots during which the ultra sound relay processed the winning block. This data is from [Toni Wahrstätter's](https://twitter.com/nero_eth) excellent [mevboost.pics](https://mevboost.pics) page 
-![img/slotsperhour](img/slotsperhour.png)
+
+<img src="img/slotsperhour.png"  width="700">
+
 The clear increase beginning midday on March 17 is the result of optimistic relaying. Isolating our data, we see that our slots relayed per-hour increased on average by 23.
-![img/slotsperhour](img/ourslotsperhour.png)
+
+<img src="img/ourslotsperhour.png"  width="700">
+
 Another interesting metric is the inclusion rate. We define *inclusion rate* as the percentage of slots that have a registered validator during which the ultra sound relay processes the winning block. Isolating just the optimistic pubkeys, we see a 10% increase in inclusion rate since starting optimistic relaying.
-![img/slotsperhour](img/inclusionrate.png)
+
+<img src="img/inclusionrate.png"  width="700">
+
 The optimistic pubkeys average hourly inclusion rate jumped from 27% to 37% as a result of the change (i.e., the set of optimistic pubkeys have a 10% higher probability of winning the auction). Overall, we see that the reduction in simulation duration has directly corresponded to better relay performance for the builders. 
 
 ### Network health
