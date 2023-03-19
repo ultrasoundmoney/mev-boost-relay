@@ -26,7 +26,7 @@ This figure shows 2 different pubkeys (anonymized). Pubkey a is not in Europe, w
 This table shows that across the board, optimistic submission total durations have at least a 1.5x improvement in the mean.
 
 ### Relay performance
-Reducing the submission durations is great, but it only matters if it impacts the overall performance of the relay. The easiest metric to look at is the percentage of total slots that the ultra sound relay received the winning block. This data is from [Toni Wahrstätter's](https://twitter.com/nero_eth) excellent [mevboost.pics](mevboost.pics) page 
+Reducing the submission durations is great, but it only matters if it impacts the overall performance of the relay. The easiest metric to look at is the percentage of total slots that the ultra sound relay received the winning block. This data is from [Toni Wahrstätter's](https://twitter.com/nero_eth) excellent [mevboost.pics](https://mevboost.pics) page 
 ![img/slotsperhour](img/slotsperhour.png)
 The clear increase beginning midday on March 17 is the result of optimistic relaying. Isolating our data, we see that our slots relayed per-hour increased by 23 on average.
 ![img/slotsperhour](img/ourslotsperhour.png)
