@@ -70,4 +70,4 @@ We are happy to report that the launch has been incredibly smooth from a network
 (9 rows)
 ```
 
-Each slot that had a simulation error still had a block published either through our relay or another, so optimistic relaying has not caused any missed slots. We are working on onboarding more builders and will continue to simulate all optimitstic blocks to ensure we catch builder or relay bugs as early as possible!
+Each slot that had a simulation error still had a block published either through our relay or another, so optimistic relaying has not caused any missed slots. We are working on onboarding more builders and will continue to simulate all optimistic blocks to ensure we catch builder or relay bugs as early as possible!
