@@ -27,9 +27,9 @@ This table shows that across the board, optimsitic submission total durations ha
 ### Relay performance
 Reducing the submission durations is great, but it only matters if it impacts the overall performance of the relay. The easiest metric to look at is the percentage of total slots during which the ultra sound relay processed the winning block. This data is from [Toni Wahrstätter's](https://twitter.com/nero_eth) excellent [mevboost.pics](https://mevboost.pics) page 
 ![img/slotsperhour](img/slotsperhour.png)
-The clear increase beginning midday on March 17 is the result of optimistic relaying. Isolating our data, we see that our slots relayed per-hour increased by 23 on average.
+The clear increase beginning midday on March 17 is the result of optimistic relaying. Isolating our data, we see that our slots relayed per-hour increased on average by 23.
 ![img/slotsperhour](img/ourslotsperhour.png)
-Another interesting metric to measure is inclusion rate. We define *inclusion rate* as the percentage of slots that have a registered validator that the ultra sound relay wins. Isolating just the optimistic pubkeys, we see a 10% increase in inclusion rate since starting optimistic relaying.
+Another interesting metric is the inclusion rate. We define *inclusion rate* as the percentage of slots that have a registered validator during which the ultra sound relay processes the winning block. Isolating just the optimistic pubkeys, we see a 10% increase in inclusion rate since starting optimistic relaying.
 ![img/slotsperhour](img/inclusionrate.png)
 The optimistic pubkeys average hourly inclusion rate jumped from 27% to 37% as a result of the change (i.e., the set of optimistic pubkeys have a 10% higher probability of winning the auction). Overall, we see that the reduction in simulation duration has directly corresponded to better relay performance for the builders. 
 
