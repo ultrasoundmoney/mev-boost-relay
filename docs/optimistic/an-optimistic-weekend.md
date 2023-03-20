@@ -1,8 +1,7 @@
 # An optimistic weekend
 
-`The hello world of optimistic mev-boost relaying.`
+`The hello world of optimistic mev-boost relaying. March 19, 2023.`
 
-March 19, 2023
 ### Purpose
 
 On Friday March 17, 2023 at 12PM UTC, [the ultra sound relay](https://relay.ultrasound.money) began optimistic relaying. This document presents a first look at some of the data collected this weekend.
