@@ -1,6 +1,6 @@
 # An optimistic weekend
 
-`The hello world of optimistic mev-boost relaying. March 19, 2023.`
+`The hello world of optimistic mev-boost relaying – March 19, 2023.`
 
 ### Purpose
 
