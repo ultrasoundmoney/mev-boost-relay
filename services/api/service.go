@@ -529,12 +529,13 @@ func (api *RelayAPI) demoteBuilder(pubkey string, req *common.BuilderSubmitBlock
 
 // processOptimisticBlock is called on a new goroutine when a optimistic block
 // needs to be simulated.
-func (api *RelayAPI) processOptimisticBlock(ctx context.Context, opts blockSimOptions) {
+func (api *RelayAPI) processOptimisticBlock(opts blockSimOptions) {
 	api.optimisticBlocksInFlight += 1
 	defer func() { api.optimisticBlocksInFlight -= 1 }()
 	api.optimisticBlocks.Add(1)
 	defer api.optimisticBlocks.Done()
 
+	ctx := context.Background()
 	builderPubkey := opts.req.BuilderPubkey().String()
 	opts.log.WithFields(logrus.Fields{
 		"builderPubkey": builderPubkey,
@@ -1477,7 +1478,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 		builderEntry.status.IsOptimistic &&
 		payload.Slot() == api.optimisticSlot {
 		optimisticSubmission = true
-		go api.processOptimisticBlock(req.Context(), opts)
+		go api.processOptimisticBlock(opts)
 	} else {
 		// Simulate block (synchronously).
 		simErr = api.simulateBlock(req.Context(), opts)
