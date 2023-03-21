@@ -63,7 +63,7 @@ func (b *BlockSimulationRateLimiter) send(context context.Context, payload *Buil
 	}()
 
 	if err := context.Err(); err != nil {
-		return ErrRequestClosed
+		return fmt.Errorf("%v, %w", ErrRequestClosed, err)
 	}
 
 	var simReq *jsonrpc.JSONRPCRequest
