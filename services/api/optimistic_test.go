@@ -306,7 +306,7 @@ func TestProcessOptimisticBlock(t *testing.T) {
 			backend.relay.blockSimRateLimiter = &MockBlockSimulationRateLimiter{
 				simulationError: tc.simulationError,
 			}
-			backend.relay.processOptimisticBlock(context.Background(), blockSimOptions{
+			backend.relay.processOptimisticBlock(blockSimOptions{
 				isHighPrio: true,
 				log:        backend.relay.log,
 				builder: &blockBuilderCacheEntry{
