@@ -30,7 +30,7 @@ It is clear that optimistic submissions are much faster than non-optimistic subm
 
 <img src="img/perpubkey.png"  width="700">
 
-This figure shows 2 different pubkeys (anonymized). `pubkey a` saw their average duration drop from 339ms to 201ms – a 40% reduction. `pubkey b` dropped from 178ms to 42ms, which is a much larger 76% reduction. Clearly, `pubkey b` benefited more from optimistic relaying. `pubkey a` is not in Europe (where ultra sound relay is located), while `pubkey b` is. This could provide evidence for the continental collocation theory, but it could also be explained if the builders have very different networking connections to the relay (e.g., `pubkey b` could have a higher bandwidth connection). Lastly, we examine the per-pubkey mean submission duration before and after optimistic relaying. 
+This figure shows 2 different pubkeys (anonymized). `pubkey a` saw their average duration drop from 339ms to 201ms – a 40% reduction. `pubkey b` dropped from 178ms to 42ms, which is a much larger 76% reduction. Clearly, `pubkey b` benefited more from optimistic relaying. `pubkey a` is not in Europe (where ultra sound relay is located), while `pubkey b` is. This could provide evidence for the continental colocation theory, but it could also be explained if the builders have very different networking connections to the relay (e.g., `pubkey b` could have a higher bandwidth connection). Lastly, we examine the per-pubkey mean submission duration before and after optimistic relaying. 
 
 <img src="img/table2.png"  width="700">
 
