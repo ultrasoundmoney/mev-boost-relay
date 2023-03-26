@@ -294,7 +294,7 @@ func TestProcessOptimisticBlock(t *testing.T) {
 			description: "simulation_error",
 			wantStatus: common.BuilderStatus{
 				IsOptimistic: false,
-				IsHighPrio:   true,
+				IsHighPrio:   false,
 			},
 			simulationError: errFake,
 		},
@@ -339,12 +339,23 @@ func TestProcessOptimisticBlock(t *testing.T) {
 func TestDemoteBuilder(t *testing.T) {
 	wantStatus := common.BuilderStatus{
 		IsOptimistic: false,
-		IsHighPrio:   true,
+		IsHighPrio:   false,
 	}
 	pubkey, secretkey, backend := startTestBackend(t)
 	pkStr := pubkey.String()
 	req := common.TestBuilderSubmitBlockRequest(pubkey, secretkey, getTestBidTrace(*pubkey, collateral))
-	backend.relay.demoteBuilder(pkStr, &req, errFake)
+	opts := blockSimOptions{
+		req: &BuilderBlockValidationRequest{
+			BuilderSubmitBlockRequest: req,
+		},
+		builder: &blockBuilderCacheEntry{
+			status: common.BuilderStatus{
+				IsOptimistic: true,
+				IsHighPrio:   true,
+			},
+		},
+	}
+	backend.relay.demoteBuilder(pkStr, opts, errFake)
 
 	// Check status in db.
 	builder, err := backend.relay.db.GetBlockBuilderByPubkey(pkStr)
@@ -460,7 +471,7 @@ func TestBuilderApiSubmitNewBlockOptimistic(t *testing.T) {
 			description: "failure_value_less_than_collateral",
 			wantStatus: common.BuilderStatus{
 				IsOptimistic: false,
-				IsHighPrio:   true,
+				IsHighPrio:   false,
 			},
 			simulationError: errFake,
 			expectDemotion:  true,
@@ -470,8 +481,8 @@ func TestBuilderApiSubmitNewBlockOptimistic(t *testing.T) {
 		{
 			description: "failure_value_more_than_collateral",
 			wantStatus: common.BuilderStatus{
-				IsOptimistic: true,
-				IsHighPrio:   true,
+				IsOptimistic: false,
+				IsHighPrio:   false,
 			},
 			simulationError: errFake,
 			expectDemotion:  false,

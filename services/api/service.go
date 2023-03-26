@@ -480,6 +480,18 @@ func (api *RelayAPI) startValidatorRegistrationDBProcessor() {
 	}
 }
 
+func (api *RelayAPI) demoteBuilderStatus(pubkey string, entry *blockBuilderCacheEntry) {
+	newStatus := common.BuilderStatus{
+		IsHighPrio:    false,
+		IsOptimistic:  false,
+		IsBlacklisted: entry.status.IsBlacklisted,
+	}
+	api.log.Infof("demoted builder, new status: %v", newStatus)
+	if err := api.db.SetBlockBuilderStatus(pubkey, newStatus); err != nil {
+		api.log.Error(fmt.Errorf("error setting builder: %v status: %v", pubkey, err))
+	}
+}
+
 // simulateBlock sends a request for a block simulation to blockSimRateLimiter.
 func (api *RelayAPI) simulateBlock(ctx context.Context, opts blockSimOptions) error {
 	t := time.Now()
@@ -492,36 +504,27 @@ func (api *RelayAPI) simulateBlock(ctx context.Context, opts blockSimOptions) er
 		simErr.Error() != ErrBlockAlreadyKnown &&
 		simErr.Error() != ErrBlockRequiresReorg &&
 		!strings.Contains(simErr.Error(), ErrMissingTrieNode) {
-		// Mark builder as non-optimistic.
+		// Reduce builder status in the builder cache.
 		opts.builder.status.IsOptimistic = false
+		opts.builder.status.IsHighPrio = false
 		log.WithError(simErr).Error("block validation failed")
+		// Write builder status to db.
+		defer api.demoteBuilderStatus(opts.req.BuilderPubkey().String(), opts.builder)
 		return simErr
 	}
 	log.Info("block validation successful")
 	return nil
 }
 
-func (api *RelayAPI) demoteBuilder(pubkey string, req *common.BuilderSubmitBlockRequest, simError error) {
-	builderEntry, ok := api.blockBuildersCache[pubkey]
-	if !ok {
-		api.log.Warnf("builder %v not in the builder cache", pubkey)
-		builderEntry = &blockBuilderCacheEntry{}
-	}
-	newStatus := common.BuilderStatus{
-		IsHighPrio:    builderEntry.status.IsHighPrio,
-		IsBlacklisted: builderEntry.status.IsBlacklisted,
-		IsOptimistic:  false,
-	}
-	api.log.Infof("demoted builder, new status: %v", newStatus)
-	if err := api.db.SetBlockBuilderStatus(pubkey, newStatus); err != nil {
-		api.log.Error(fmt.Errorf("error setting builder: %v status: %v", pubkey, err))
-	}
+func (api *RelayAPI) demoteBuilder(pubkey string, opts blockSimOptions, simError error) {
+	// Write builder status to db.
+	api.demoteBuilderStatus(pubkey, opts.builder)
 	// Write to demotions table.
 	api.log.WithFields(logrus.Fields{"builder_pubkey": pubkey}).Info("demoting builder")
-	if err := api.db.InsertBuilderDemotion(req, simError); err != nil {
+	if err := api.db.InsertBuilderDemotion(&opts.req.BuilderSubmitBlockRequest, simError); err != nil {
 		api.log.WithError(err).WithFields(logrus.Fields{
 			"errorWritingDemotionToDB": true,
-			"bidTrace":                 req.Message,
+			"bidTrace":                 opts.req.Message,
 			"simError":                 simError,
 		}).Error("failed to save demotion to database")
 	}
@@ -549,8 +552,18 @@ func (api *RelayAPI) processOptimisticBlock(opts blockSimOptions) {
 		api.log.WithError(simErr).Error("block simulation failed in processOptimisticBlock, demoting builder")
 
 		// Demote the builder.
-		api.demoteBuilder(builderPubkey, &opts.req.BuilderSubmitBlockRequest, simErr)
+		api.demoteBuilder(builderPubkey, opts, simErr)
 	}
+}
+
+func (api *RelayAPI) isHighPrioBid(val *big.Int, payload *common.BuilderSubmitBlockRequest) bool {
+	bestBid, err := api.redis.GetBestBid(payload.Slot(), payload.ParentHash(), payload.ProposerPubkey())
+	if err != nil || bestBid == nil {
+		api.log.WithError(err).Warning("could not get highest bid in handleSubmitNewBlock, marking incoming bid high-prio")
+		return true
+	}
+	// a high-prio bid must have a value higher than the current best bid.
+	return val.Cmp(bestBid.Value()) > 0
 }
 
 func (api *RelayAPI) processNewSlot(headSlot uint64) {
@@ -1462,9 +1475,13 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	pf.Prechecks = uint64(nextTime.Sub(prevTime).Microseconds())
 	prevTime = nextTime
 
+	// Only use high-prio queue if the builder is high-prio and the bid is
+	// larger than the current best bid.
+	highPrioBid := api.isHighPrioBid(payload.Value(), payload)
+
 	// Construct simulation request.
 	opts := blockSimOptions{
-		isHighPrio: builderEntry.status.IsHighPrio,
+		isHighPrio: builderEntry.status.IsHighPrio && highPrioBid,
 		log:        log,
 		builder:    builderEntry,
 		req: &BuilderBlockValidationRequest{
