@@ -563,3 +563,36 @@ func TestInternalBuilderCollateral(t *testing.T) {
 	require.Equal(t, resp.BuilderID, "builder0x69")
 	require.Equal(t, resp.Collateral, "10000")
 }
+
+func TestIsHighPrioBid(t *testing.T) {
+	pubkey, secretkey, backend := startTestBackend(t)
+	val := big.NewInt(11)
+	req := common.TestBuilderSubmitBlockRequest(pubkey, secretkey, getTestBidTrace(*pubkey, collateral))
+	// No best bid => return true.
+	require.True(t, backend.relay.isHighPrioBid(val, &req))
+
+	backend.relay.optimisticSlot = slot
+	// Set best bid to lower.
+	rr := runOptimisticBlockSubmission(t, blockRequestOpts{
+		secretkey:  secretkey,
+		pubkey:     *pubkey,
+		blockValue: 10,
+		domain:     backend.relay.opts.EthNetDetails.DomainBuilder,
+	}, nil, backend)
+	require.Equal(t, rr.Code, 200)
+
+	// bestBid = 10, val = 11 => return true.
+	require.True(t, backend.relay.isHighPrioBid(val, &req))
+
+	// Set best bid to higher.
+	rr = runOptimisticBlockSubmission(t, blockRequestOpts{
+		secretkey:  secretkey,
+		pubkey:     *pubkey,
+		blockValue: 12,
+		domain:     backend.relay.opts.EthNetDetails.DomainBuilder,
+	}, nil, backend)
+	require.Equal(t, rr.Code, 200)
+
+	// bestBid = 12, val = 11 => return false.
+	require.False(t, backend.relay.isHighPrioBid(val, &req))
+}
