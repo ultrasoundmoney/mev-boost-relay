@@ -53,6 +53,7 @@ var (
 	ErrBuilderAPIWithoutSecretKey = errors.New("cannot start builder API without secret key")
 	ErrMismatchedForkVersions     = errors.New("can not find matching fork versions as retrieved from beacon node")
 	ErrMissingForkVersions        = errors.New("invalid bellatrix/capella fork version from beacon node")
+	ErrUnknownAncestor            = errors.New("unknown ancestor")
 )
 
 var (
@@ -488,6 +489,19 @@ func (api *RelayAPI) simulateBlock(ctx context.Context, opts blockSimOptions) er
 		"duration":   time.Since(t).Seconds(),
 		"numWaiting": api.blockSimRateLimiter.currentCounter(),
 	})
+	retryCount := 0
+	// Retry ErrUnknownAncestor (a geth sync error) up to 3 times.
+	for errors.Is(simErr, ErrUnknownAncestor) {
+		log.WithFields(logrus.Fields{
+			"block_hash": opts.req.BlockHash,
+			"slot":       opts.req.Slot,
+		}).Warning("retrying block due to unknown ancestor")
+		simErr = api.blockSimRateLimiter.send(ctx, opts.req, opts.isHighPrio)
+		retryCount += 1
+		if retryCount == 3 {
+			break
+		}
+	}
 	if simErr != nil &&
 		simErr.Error() != ErrBlockAlreadyKnown &&
 		simErr.Error() != ErrBlockRequiresReorg &&

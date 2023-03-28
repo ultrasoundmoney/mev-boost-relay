@@ -217,7 +217,7 @@ func runOptimisticGetPayload(t *testing.T, opts blockRequestOpts, backend *testB
 
 func runOptimisticBlockSubmission(t *testing.T, opts blockRequestOpts, simErr error, backend *testBackend) *httptest.ResponseRecorder {
 	backend.relay.blockSimRateLimiter = &MockBlockSimulationRateLimiter{
-		simulationError: simErr,
+		errs: []error{simErr},
 	}
 
 	req := common.TestBuilderSubmitBlockRequest(&opts.pubkey, opts.secretkey, getTestBidTrace(opts.pubkey, opts.blockValue))
@@ -255,7 +255,7 @@ func TestSimulateBlock(t *testing.T) {
 		t.Run(tc.description, func(t *testing.T) {
 			pubkey, secretkey, backend := startTestBackend(t)
 			backend.relay.blockSimRateLimiter = &MockBlockSimulationRateLimiter{
-				simulationError: tc.simulationError,
+				errs: []error{tc.simulationError},
 			}
 			err := backend.relay.simulateBlock(context.Background(), blockSimOptions{
 				isHighPrio: true,
@@ -273,6 +273,63 @@ func TestSimulateBlock(t *testing.T) {
 			if tc.expectError {
 				require.Equal(t, tc.simulationError, err)
 			}
+		})
+	}
+}
+
+func TestSimulateBlockRetries(t *testing.T) {
+	cases := []struct {
+		description string
+		errs        []error
+		expectError bool
+	}{
+		{
+			description: "retry_then_success",
+			errs:        []error{ErrUnknownAncestor, nil},
+		},
+		{
+			description: "retry_then_error",
+			errs:        []error{ErrUnknownAncestor, ErrInvalidTransaction},
+			expectError: true,
+		},
+		{
+			description: "retry_2x_then_success",
+			errs:        []error{ErrUnknownAncestor, ErrUnknownAncestor, nil},
+		},
+		{
+			description: "retry_3x_then_success",
+			errs:        []error{ErrUnknownAncestor, ErrUnknownAncestor, ErrUnknownAncestor, nil},
+		},
+		{
+			description: "retry_3x_then_failure",
+			errs:        []error{ErrUnknownAncestor, ErrUnknownAncestor, ErrUnknownAncestor, ErrUnknownAncestor},
+			expectError: true,
+		},
+		{
+			description: "retry_3x_then_failure_diff_error",
+			errs:        []error{ErrUnknownAncestor, ErrUnknownAncestor, ErrUnknownAncestor, ErrInvalidTransaction},
+			expectError: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.description, func(t *testing.T) {
+			pubkey, secretkey, backend := startTestBackend(t)
+			backend.relay.blockSimRateLimiter = &MockBlockSimulationRateLimiter{
+				errs: tc.errs,
+			}
+			err := backend.relay.simulateBlock(context.Background(), blockSimOptions{
+				isHighPrio: true,
+				log:        backend.relay.log,
+				req: &BuilderBlockValidationRequest{
+					BuilderSubmitBlockRequest: common.TestBuilderSubmitBlockRequest(
+						pubkey, secretkey, getTestBidTrace(*pubkey, collateral)),
+				},
+			})
+			if tc.expectError {
+				require.Equal(t, tc.errs[len(tc.errs)-1], err)
+				return
+			}
+			require.Nil(t, err)
 		})
 	}
 }
@@ -304,7 +361,7 @@ func TestProcessOptimisticBlock(t *testing.T) {
 			pubkey, secretkey, backend := startTestBackend(t)
 			pkStr := pubkey.String()
 			backend.relay.blockSimRateLimiter = &MockBlockSimulationRateLimiter{
-				simulationError: tc.simulationError,
+				errs: []error{tc.simulationError},
 			}
 			backend.relay.processOptimisticBlock(blockSimOptions{
 				isHighPrio: true,
