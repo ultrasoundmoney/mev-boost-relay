@@ -11,6 +11,7 @@ see [docs/optmistic](docs/optimistic) for the following:
 
 - [Builder onboarding](docs/optimistic/builder-onboarding.md)
 - [Event log](docs/optimistic/event-log.md)
+- [An optimistic weekend](docs/optimistic/an-optimistic-weekend.md)
 
 ## Extended discussion
 - [Initial proposal](https://github.com/michaelneuder/optimistic-relay-documentation/blob/main/proposal.md)
