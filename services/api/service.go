@@ -496,7 +496,8 @@ func (api *RelayAPI) simulateBlock(ctx context.Context, opts blockSimOptions) er
 			"block_hash": opts.req.BlockHash,
 			"slot":       opts.req.Slot,
 		}).Warning("retrying block due to unknown ancestor")
-		simErr = api.blockSimRateLimiter.send(ctx, opts.req, opts.isHighPrio)
+		// Retry with low-prio.
+		simErr = api.blockSimRateLimiter.send(ctx, opts.req, false)
 		retryCount += 1
 		if retryCount == 3 {
 			break
