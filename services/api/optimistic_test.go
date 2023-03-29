@@ -317,9 +317,15 @@ func TestSimulateBlockRetries(t *testing.T) {
 			backend.relay.blockSimRateLimiter = &MockBlockSimulationRateLimiter{
 				errs: tc.errs,
 			}
+			entry := &blockBuilderCacheEntry{
+				status: common.BuilderStatus{
+					IsOptimistic: true,
+				},
+			}
 			err := backend.relay.simulateBlock(context.Background(), blockSimOptions{
 				isHighPrio: true,
 				log:        backend.relay.log,
+				builder:    entry,
 				req: &BuilderBlockValidationRequest{
 					BuilderSubmitBlockRequest: common.TestBuilderSubmitBlockRequest(
 						pubkey, secretkey, getTestBidTrace(*pubkey, collateral)),
