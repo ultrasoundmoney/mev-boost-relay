@@ -79,6 +79,7 @@ var (
 	numActiveValidatorProcessors = cli.GetEnvInt("NUM_ACTIVE_VALIDATOR_PROCESSORS", 10)
 	numValidatorRegProcessors    = cli.GetEnvInt("NUM_VALIDATOR_REG_PROCESSORS", 10)
 	timeoutGetPayloadRetryMs     = cli.GetEnvInt("GETPAYLOAD_RETRY_TIMEOUT_MS", 100)
+	getPayloadResponseDelayMs    = cli.GetEnvInt("GETPAYLOAD_DELAY_MS", 1000)
 
 	apiReadTimeoutMs       = cli.GetEnvInt("API_TIMEOUT_READ_MS", 1500)
 	apiReadHeaderTimeoutMs = cli.GetEnvInt("API_TIMEOUT_READHEADER_MS", 600)
@@ -253,11 +254,6 @@ func NewRelayAPI(opts RelayAPIOpts) (api *RelayAPI, err error) {
 	if os.Getenv("FORCE_GET_HEADER_204") == "1" {
 		api.log.Warn("env: FORCE_GET_HEADER_204 - forcing getHeader to always return 204")
 		api.ffForceGetHeader204 = true
-	}
-
-	if os.Getenv("DISABLE_BLOCK_PUBLISHING") == "1" {
-		api.log.Warn("env: DISABLE_BLOCK_PUBLISHING - disabling publishing blocks on getPayload")
-		api.ffDisableBlockPublishing = true
 	}
 
 	if os.Getenv("DISABLE_LOWPRIO_BUILDERS") == "1" {
@@ -1031,6 +1027,18 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 		}
 	}
 
+	// Publish the signed beacon block via beacon-node
+	signedBeaconBlock := SignedBlindedBeaconBlockToBeaconBlock(payload, getPayloadResp)
+	code, err := api.beaconClient.PublishBlock(signedBeaconBlock) // errors are logged inside
+	if err != nil {
+		log.WithError(err).WithField("code", code).Error("failed to publish block")
+		api.RespondError(w, http.StatusBadRequest, "failed to publish block")
+		return
+	}
+
+	// give the beacon network some time to propagate the block
+	time.Sleep(time.Duration(getPayloadResponseDelayMs) * time.Millisecond)
+
 	api.RespondOK(w, getPayloadResp)
 	log = log.WithFields(logrus.Fields{
 		"numTx":       getPayloadResp.NumTx(),
@@ -1116,16 +1124,6 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 				"signedRegistration":     signedRegistration,
 			}).WithError(err).Error("unable to update builder demotion with refund justification")
 		}
-	}()
-
-	// Publish the signed beacon block via beacon-node
-	go func() {
-		if api.ffDisableBlockPublishing {
-			log.Info("publishing the block is disabled")
-			return
-		}
-		signedBeaconBlock := SignedBlindedBeaconBlockToBeaconBlock(payload, getPayloadResp)
-		_, _ = api.beaconClient.PublishBlock(signedBeaconBlock) // errors are logged inside
 	}()
 }
 
