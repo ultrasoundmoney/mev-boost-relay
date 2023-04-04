@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"math/rand"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -969,22 +970,20 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 		payload.Capella = capellaPayload
 	}
 
+	// Snapshot current time
+	requestTime := time.Now().UTC()
+	slotStartTimestamp := api.genesisInfo.Data.GenesisTime + (payload.Slot() * 12)
+	msIntoSlot := uint64(requestTime.UnixMilli()) - (slotStartTimestamp * 1000)
+
 	log = log.WithFields(logrus.Fields{
-		"slot":      payload.Slot(),
-		"blockHash": payload.BlockHash(),
-		"idArg":     req.URL.Query().Get("id"),
+		"slot":             payload.Slot(),
+		"blockHash":        payload.BlockHash(),
+		"idArg":            req.URL.Query().Get("id"),
+		"requestTimestamp": requestTime.Unix(),
+		"slotStartSec":     slotStartTimestamp,
+		"msIntoSlot":       msIntoSlot,
 	})
-
-	slotStart := (api.genesisInfo.Data.GenesisTime + (payload.Slot() * 12)) * 1000
-	currTime := uint64(time.Now().UnixMilli())
-	msIntoSlot := currTime - slotStart
-	log.WithField("msIntoSlot", msIntoSlot).Info("getPayload request received")
-
-	if msIntoSlot > 3000 {
-		log.WithField("time", currTime).Error("timestamp too late")
-		api.RespondError(w, http.StatusBadRequest, "timestamp too late")
-		return
-	}
+	log.Info("getPayload request received")
 
 	proposerPubkey, found := api.datastore.GetKnownValidatorPubkeyByIndex(payload.ProposerIndex())
 	if !found {
@@ -1016,6 +1015,37 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 		}
 	}
 
+	if msIntoSlot > 3000 {
+		log.Error("timestamp too late")
+		api.RespondError(w, http.StatusBadRequest, "timestamp too late")
+		return
+	}
+
+	// Check if validator is blocked.
+	blocked, err := api.db.IsValidatorBlocked(pk.String())
+	if err != nil {
+		log.WithError(err).Error("unable to get validator blocked status")
+	} else if blocked {
+		log.Error("validator is blocked")
+		api.RespondError(w, http.StatusBadRequest, "validator is blocked")
+		return
+	}
+
+	// Check whether getPayload has already been called
+	lastSlotDeliveredStr, err := api.redis.GetStats(datastore.RedisStatsFieldSlotLastPayloadDelivered)
+	if err != nil && !errors.Is(err, redis.Nil) {
+		log.WithError(err).Error("failed to get delivered payload slot from redis")
+	} else {
+		slotLastPayloadDelivered, err := strconv.ParseUint(lastSlotDeliveredStr, 10, 64)
+		if err != nil {
+			log.WithError(err).Errorf("failed to parse delivered payload slot from redis: %s", lastSlotDeliveredStr)
+		} else if payload.Slot() <= slotLastPayloadDelivered {
+			log.Error("getPayload was already called for this slot")
+			api.RespondError(w, http.StatusBadRequest, "payload for this slot was already delivered")
+			return
+		}
+	}
+
 	// Get the response - from memory, Redis or DB
 	// note that mev-boost might send getPayload for bids of other relays, thus this code wouldn't find anything
 	getPayloadResp, err := api.datastore.GetGetPayloadResponse(payload.Slot(), proposerPubkey.String(), payload.BlockHash())
@@ -1036,6 +1066,10 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 		}
 	}
 
+	// Random delay before publishing (0-500ms)
+	delayMillis := rand.Intn(500) //nolint:gosec
+	time.Sleep(time.Duration(delayMillis) * time.Millisecond)
+
 	// Publish the signed beacon block via beacon-node
 	signedBeaconBlock := SignedBlindedBeaconBlockToBeaconBlock(payload, getPayloadResp)
 	code, err := api.beaconClient.PublishBlock(signedBeaconBlock) // errors are logged inside
@@ -1044,10 +1078,20 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 		api.RespondError(w, http.StatusBadRequest, "failed to publish block")
 		return
 	}
+	log.Info("block published through beacon node")
+
+	// Remember that getPayload has already been called
+	go func() {
+		err := api.redis.SetStats(datastore.RedisStatsFieldSlotLastPayloadDelivered, payload.Slot())
+		if err != nil {
+			log.WithError(err).Error("failed to save delivered payload slot to redis")
+		}
+	}()
 
 	// give the beacon network some time to propagate the block
 	time.Sleep(time.Duration(getPayloadResponseDelayMs) * time.Millisecond)
 
+	// respond to the HTTP request
 	api.RespondOK(w, getPayloadResp)
 	log = log.WithFields(logrus.Fields{
 		"numTx":       getPayloadResp.NumTx(),
@@ -1057,11 +1101,6 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 
 	// Save information about delivered payload
 	go func() {
-		err = api.redis.SetStats(datastore.RedisStatsFieldSlotLastPayloadDelivered, payload.Slot())
-		if err != nil {
-			log.WithError(err).Error("failed to save delivered payload slot to redis")
-		}
-
 		bidTrace, err := api.redis.GetBidTrace(payload.Slot(), proposerPubkey.String(), payload.BlockHash())
 		if err != nil {
 			log.WithError(err).Error("failed to get bidTrace for delivered payload from redis")
