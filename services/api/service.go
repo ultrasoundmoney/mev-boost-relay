@@ -980,7 +980,7 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 	msIntoSlot := currTime - slotStart
 	log.WithField("msIntoSlot", msIntoSlot).Info("getPayload request received")
 
-	if msIntoSlot > 2000 {
+	if msIntoSlot > 3000 {
 		log.WithField("time", currTime).Error("timestamp too late")
 		api.RespondError(w, http.StatusBadRequest, "timestamp too late")
 		return
