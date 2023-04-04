@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"math/big"
-	"math/rand"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -928,7 +927,6 @@ func (api *RelayAPI) handleGetHeader(w http.ResponseWriter, req *http.Request) {
 }
 
 func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) {
-	signedAt := time.Now().UTC()
 	api.getPayloadCallsInFlight.Add(1)
 	defer api.getPayloadCallsInFlight.Done()
 
@@ -972,18 +970,6 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 
 	// Snapshot current time
 	requestTime := time.Now().UTC()
-	slotStartTimestamp := api.genesisInfo.Data.GenesisTime + (payload.Slot() * 12)
-	msIntoSlot := uint64(requestTime.UnixMilli()) - (slotStartTimestamp * 1000)
-
-	log = log.WithFields(logrus.Fields{
-		"slot":             payload.Slot(),
-		"blockHash":        payload.BlockHash(),
-		"idArg":            req.URL.Query().Get("id"),
-		"requestTimestamp": requestTime.Unix(),
-		"slotStartSec":     slotStartTimestamp,
-		"msIntoSlot":       msIntoSlot,
-	})
-	log.Info("getPayload request received")
 
 	proposerPubkey, found := api.datastore.GetKnownValidatorPubkeyByIndex(payload.ProposerIndex())
 	if !found {
@@ -1015,7 +1001,20 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 		}
 	}
 
-	if msIntoSlot > 3000 {
+	slotStartTimestamp := api.genesisInfo.Data.GenesisTime + (payload.Slot() * 12)
+	msIntoSlot := uint64(requestTime.UnixMilli()) - (slotStartTimestamp * 1000)
+
+	log = log.WithFields(logrus.Fields{
+		"slot":             payload.Slot(),
+		"blockHash":        payload.BlockHash(),
+		"idArg":            req.URL.Query().Get("id"),
+		"requestTimestamp": requestTime.UnixMilli(),
+		"slotStartSec":     slotStartTimestamp,
+		"msIntoSlot":       msIntoSlot,
+	})
+	log.Info("getPayload request received")
+
+	if msIntoSlot > 4000 {
 		log.Error("timestamp too late")
 		api.RespondError(w, http.StatusBadRequest, "timestamp too late")
 		return
@@ -1066,10 +1065,6 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 		}
 	}
 
-	// Random delay before publishing (0-500ms)
-	delayMillis := rand.Intn(500) //nolint:gosec
-	time.Sleep(time.Duration(delayMillis) * time.Millisecond)
-
 	// Publish the signed beacon block via beacon-node
 	signedBeaconBlock := SignedBlindedBeaconBlockToBeaconBlock(payload, getPayloadResp)
 	code, err := api.beaconClient.PublishBlock(signedBeaconBlock) // errors are logged inside
@@ -1106,7 +1101,7 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 			log.WithError(err).Error("failed to get bidTrace for delivered payload from redis")
 		}
 
-		err = api.db.SaveDeliveredPayload(bidTrace, payload, signedAt)
+		err = api.db.SaveDeliveredPayload(bidTrace, payload, requestTime)
 		if err != nil {
 			log.WithError(err).WithFields(logrus.Fields{
 				"bidTrace": bidTrace,
