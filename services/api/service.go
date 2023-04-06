@@ -1030,6 +1030,8 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
+	log = log.WithField("timestampAfterBlocked", time.Now().UTC().UnixMilli())
+
 	// Check whether getPayload has already been called
 	lastSlotDeliveredStr, err := api.redis.GetStats(datastore.RedisStatsFieldSlotLastPayloadDelivered)
 	if err != nil && !errors.Is(err, redis.Nil) {
@@ -1044,6 +1046,8 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 			return
 		}
 	}
+
+	log = log.WithField("timestampAfterAlreadyDelivered", time.Now().UTC().UnixMilli())
 
 	// Get the response - from memory, Redis or DB
 	// note that mev-boost might send getPayload for bids of other relays, thus this code wouldn't find anything
