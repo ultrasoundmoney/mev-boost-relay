@@ -1020,17 +1020,7 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	// Check if validator is blocked.
-	blocked, err := api.db.IsValidatorBlocked(pk.String())
-	if err != nil {
-		log.WithError(err).Error("unable to get validator blocked status")
-	} else if blocked {
-		log.Error("validator is blocked")
-		api.RespondError(w, http.StatusBadRequest, "validator is blocked")
-		return
-	}
-
-	log = log.WithField("timestampAfterBlocked", time.Now().UTC().UnixMilli())
+	log = log.WithField("timestampAfterTooLateCheck", time.Now().UTC().UnixMilli())
 
 	// Check whether getPayload has already been called
 	lastSlotDeliveredStr, err := api.redis.GetStats(datastore.RedisStatsFieldSlotLastPayloadDelivered)
