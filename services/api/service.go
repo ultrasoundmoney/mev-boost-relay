@@ -1108,7 +1108,6 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 	requestTime := time.Now().UTC()
 	slotStartTimestamp := api.genesisInfo.Data.GenesisTime + (payload.Slot() * 12)
 	msIntoSlot := uint64(requestTime.UnixMilli()) - (slotStartTimestamp * 1000)
-	fmt.Printf("*** %v, %v\n", msIntoSlot, slotStartTimestamp)
 	log = log.WithFields(logrus.Fields{
 		"slot":                 payload.Slot(),
 		"blockHash":            payload.BlockHash(),
