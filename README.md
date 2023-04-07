@@ -6,7 +6,6 @@ for the ultra sound [relay](relay.ultrasound.money).
 We have also opened a PR with the same set of changes on the main repo https://github.com/flashbots/mev-boost-relay/pull/285 to (a) help see the diff from the base relay implementation, (b) maintain the history of the change discussed in that PR, and (c) continue the discussion of upstreaming this change. 
 
 ## Operational documentation
-
 see [docs/optmistic](docs/optimistic) for the following:
 
 - [Builder onboarding](docs/optimistic/builder-onboarding.md)

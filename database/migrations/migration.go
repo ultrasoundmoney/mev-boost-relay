@@ -10,5 +10,7 @@ var Migrations = migrate.MemoryMigrationSource{
 		Migration001InitDatabase,
 		Migration002RemoveIsBestAddReceivedAt,
 		Migration003Optimistic,
+		Migration003AddEligibleAtSignedAt,
+		Migration004BlockedValidator,
 	},
 }

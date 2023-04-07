@@ -34,7 +34,7 @@ func (db MockDB) GetLatestValidatorRegistrations(timestampOnly bool) ([]*Validat
 	return nil, nil
 }
 
-func (db MockDB) SaveBuilderBlockSubmission(payload *common.BuilderSubmitBlockRequest, simError error, receivedAt, eligibleAt time.Time, profile common.Profile, optimisticSubmission bool) (entry *BuilderBlockSubmissionEntry, err error) {
+func (db MockDB) SaveBuilderBlockSubmission(payload *common.BuilderSubmitBlockRequest, simError error, receivedAt, eligibleAt time.Time, saveExecPayload bool, profile common.Profile, optimisticSubmission bool) (entry *BuilderBlockSubmissionEntry, err error) {
 	return nil, nil
 }
 
@@ -172,4 +172,16 @@ func (db MockDB) GetBuilderDemotion(trace *common.BidTraceV2) (*BuilderDemotionE
 		return &BuilderDemotionEntry{}, nil
 	}
 	return nil, nil
+}
+
+func (db MockDB) InsertBlockedValidator(entry BlockedValidatorEntry) error {
+	return nil
+}
+
+func (db MockDB) GetBlockedValidator(pubkey string) (*BlockedValidatorEntry, error) {
+	return nil, nil
+}
+
+func (db MockDB) IsValidatorBlocked(pubkey string) (bool, error) {
+	return false, nil
 }

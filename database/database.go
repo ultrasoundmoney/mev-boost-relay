@@ -3,7 +3,9 @@ package database
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -25,7 +27,7 @@ type IDatabaseService interface {
 	GetValidatorRegistration(pubkey string) (*ValidatorRegistrationEntry, error)
 	GetValidatorRegistrationsForPubkeys(pubkeys []string) ([]*ValidatorRegistrationEntry, error)
 
-	SaveBuilderBlockSubmission(payload *common.BuilderSubmitBlockRequest, simError error, receivedAt, eligibleAt time.Time, profile common.Profile, optimisticSubmission bool) (entry *BuilderBlockSubmissionEntry, err error)
+	SaveBuilderBlockSubmission(payload *common.BuilderSubmitBlockRequest, simError error, receivedAt, eligibleAt time.Time, saveExecPayload bool, profile common.Profile, optimisticSubmission bool) (entry *BuilderBlockSubmissionEntry, err error)
 	GetBlockSubmissionEntry(slot uint64, proposerPubkey, blockHash string) (entry *BuilderBlockSubmissionEntry, err error)
 	GetBuilderSubmissions(filters GetBuilderSubmissionsFilters) ([]*BuilderBlockSubmissionEntry, error)
 	GetBuilderSubmissionsBySlots(slotFrom, slotTo uint64) (entries []*BuilderBlockSubmissionEntry, err error)
@@ -49,6 +51,10 @@ type IDatabaseService interface {
 	InsertBuilderDemotion(submitBlockRequest *common.BuilderSubmitBlockRequest, simError error) error
 	UpdateBuilderDemotion(trace *common.BidTraceV2, signedBlock *common.SignedBeaconBlock, signedRegistration *types.SignedValidatorRegistration) error
 	GetBuilderDemotion(trace *common.BidTraceV2) (*BuilderDemotionEntry, error)
+
+	InsertBlockedValidator(entry BlockedValidatorEntry) error
+	GetBlockedValidator(pubkey string) (*BlockedValidatorEntry, error)
+	IsValidatorBlocked(pubkey string) (bool, error)
 }
 
 type DatabaseService struct {
@@ -171,16 +177,18 @@ func (s *DatabaseService) GetLatestValidatorRegistrations(timestampOnly bool) ([
 	return registrations, err
 }
 
-func (s *DatabaseService) SaveBuilderBlockSubmission(payload *common.BuilderSubmitBlockRequest, simError error, receivedAt, eligibleAt time.Time, profile common.Profile, optimisticSubmission bool) (entry *BuilderBlockSubmissionEntry, err error) {
+func (s *DatabaseService) SaveBuilderBlockSubmission(payload *common.BuilderSubmitBlockRequest, simError error, receivedAt, eligibleAt time.Time, saveExecPayload bool, profile common.Profile, optimisticSubmission bool) (entry *BuilderBlockSubmissionEntry, err error) {
 	// Save execution_payload: insert, or if already exists update to be able to return the id ('on conflict do nothing' doesn't return an id)
 	execPayloadEntry, err := PayloadToExecPayloadEntry(payload)
 	if err != nil {
 		return nil, err
 	}
 
-	err = s.nstmtInsertExecutionPayload.QueryRow(execPayloadEntry).Scan(&execPayloadEntry.ID)
-	if err != nil {
-		return nil, err
+	if saveExecPayload {
+		err = s.nstmtInsertExecutionPayload.QueryRow(execPayloadEntry).Scan(&execPayloadEntry.ID)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Save block_submission
@@ -575,4 +583,29 @@ func (s *DatabaseService) GetBuilderDemotion(trace *common.BidTraceV2) (*Builder
 		return nil, err
 	}
 	return entry, nil
+}
+
+func (s *DatabaseService) InsertBlockedValidator(entry BlockedValidatorEntry) error {
+	query := `INSERT INTO ` + vars.TableBlockedValidator + `
+		(pubkey, is_blocked, notes) VALUES (:pubkey, :is_blocked, :notes)`
+	_, err := s.DB.NamedExec(query, entry)
+	return err
+}
+
+func (s *DatabaseService) GetBlockedValidator(pubkey string) (*BlockedValidatorEntry, error) {
+	query := `SELECT id, inserted_at, pubkey, is_blocked, notes FROM ` + vars.TableBlockedValidator + ` WHERE pubkey=$1;`
+	entry := &BlockedValidatorEntry{}
+	err := s.DB.Get(entry, query, pubkey)
+	return entry, err
+}
+
+func (s *DatabaseService) IsValidatorBlocked(pubkey string) (bool, error) {
+	entry, err := s.GetBlockedValidator(pubkey)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return entry.Blocked, nil
 }
