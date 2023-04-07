@@ -12,9 +12,6 @@ var (
 	TableBuilderBlockSubmission = tableBase + "_builder_block_submission"
 	TableDeliveredPayload       = tableBase + "_payload_delivered"
 	TableBlockBuilder           = tableBase + "_blockbuilder"
-<<<<<<< HEAD
 	TableBuilderDemotions       = tableBase + "_builder_demotions"
-=======
 	TableBlockedValidator       = tableBase + "_blocked_validator"
->>>>>>> 498d882304308985ed3dc2dfa39abdfc4c255e03
 )

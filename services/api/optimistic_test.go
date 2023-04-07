@@ -13,13 +13,11 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/attestantio/go-builder-client/api"
-	"github.com/attestantio/go-builder-client/api/capella"
 	v1 "github.com/attestantio/go-builder-client/api/v1"
 	consensusspec "github.com/attestantio/go-eth2-client/spec"
 	"github.com/attestantio/go-eth2-client/spec/bellatrix"
 	consensuscapella "github.com/attestantio/go-eth2-client/spec/capella"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
-	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/flashbots/go-boost-utils/bls"
 	boostTypes "github.com/flashbots/go-boost-utils/types"
 	"github.com/flashbots/mev-boost-relay/beaconclient"
@@ -28,7 +26,6 @@ import (
 	"github.com/flashbots/mev-boost-relay/datastore"
 	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/require"
-	blst "github.com/supranational/blst/bindings/go"
 )
 
 const (
@@ -37,6 +34,7 @@ const (
 	builderID   = "builder0x69"
 	randao      = "01234567890123456789012345678901"
 	proposerInd = uint64(987)
+	genesis     = 1606824023
 )
 
 var (
@@ -64,19 +62,20 @@ func getTestBidTrace(pubkey phase0.BLSPubKey, value uint64) *common.BidTraceV2 {
 
 type blockRequestOpts struct {
 	pubkey     phase0.BLSPubKey
-	secretkey  *blst.SecretKey
+	secretkey  *bls.SecretKey
 	blockValue uint64
 	domain     boostTypes.Domain
 }
 
-func startTestBackend(t *testing.T) (*phase0.BLSPubKey, *blst.SecretKey, *testBackend) {
+func startTestBackend(t *testing.T) (*phase0.BLSPubKey, *bls.SecretKey, *testBackend) {
 	// Setup test key pair.
 	sk, _, err := bls.GenerateNewKeypair()
 	require.NoError(t, err)
-	blsPubkey := bls.PublicKeyFromSecretKey(sk)
-	pkSlice := blsPubkey.Compress()
+	blsPubkey, err := bls.PublicKeyFromSecretKey(sk)
+	require.NoError(t, err)
+	pkBytes := blsPubkey.Bytes()
 	var pubkey phase0.BLSPubKey
-	copy(pubkey[:], pkSlice[:])
+	copy(pubkey[:], pkBytes[:])
 	pkStr := pubkey.String()
 
 	// Setup test backend.
@@ -135,7 +134,7 @@ func startTestBackend(t *testing.T) (*phase0.BLSPubKey, *blst.SecretKey, *testBa
 	require.NoError(t, err)
 	mockRedis, err := datastore.NewRedisCache(redisTestServer.Addr(), "")
 	require.NoError(t, err)
-	mockDS, err := datastore.NewDatastore(backend.relay.log, mockRedis, mockDB)
+	mockDS, err := datastore.NewDatastore(backend.relay.log, mockRedis, nil, mockDB)
 	require.NoError(t, err)
 
 	backend.relay.datastore = mockDS
@@ -184,43 +183,12 @@ func startTestBackend(t *testing.T) (*phase0.BLSPubKey, *blst.SecretKey, *testBa
 	return &pubkey, sk, backend
 }
 
-func runOptimisticGetPayload(t *testing.T, opts blockRequestOpts, backend *testBackend) {
-	var txn hexutil.Bytes
-	err := txn.UnmarshalText([]byte("0x03"))
-	require.NoError(t, err)
-
-	block := &boostTypes.BlindedBeaconBlock{
-		Slot:          slot,
-		ProposerIndex: proposerInd,
-		Body: &boostTypes.BlindedBeaconBlockBody{
-			ExecutionPayloadHeader: &boostTypes.ExecutionPayloadHeader{
-				BlockHash:   getTestBlockHash(t),
-				BlockNumber: 1234,
-			},
-			Eth1Data:      &boostTypes.Eth1Data{},
-			SyncAggregate: &boostTypes.SyncAggregate{},
-		},
-	}
-	signature, err := boostTypes.SignMessage(block, opts.domain, opts.secretkey)
-	require.NoError(t, err)
-	req := &boostTypes.SignedBlindedBeaconBlock{
-		Message:   block,
-		Signature: signature,
-	}
-
-	rr := backend.request(http.MethodPost, pathGetPayload, req)
-	require.Equal(t, rr.Code, http.StatusOK)
-
-	// Let updates happen async.
-	time.Sleep(100 * time.Millisecond)
-}
-
 func runOptimisticBlockSubmission(t *testing.T, opts blockRequestOpts, simErr error, backend *testBackend) *httptest.ResponseRecorder {
 	backend.relay.blockSimRateLimiter = &MockBlockSimulationRateLimiter{
 		simulationError: simErr,
 	}
 
-	req := common.TestBuilderSubmitBlockRequest(&opts.pubkey, opts.secretkey, getTestBidTrace(opts.pubkey, opts.blockValue))
+	req := common.TestBuilderSubmitBlockRequest(opts.secretkey, getTestBidTrace(opts.pubkey, opts.blockValue))
 	rr := backend.request(http.MethodPost, pathSubmitNewBlock, &req)
 
 	// Let updates happen async.
@@ -267,7 +235,7 @@ func TestSimulateBlock(t *testing.T) {
 				},
 				req: &BuilderBlockValidationRequest{
 					BuilderSubmitBlockRequest: common.TestBuilderSubmitBlockRequest(
-						pubkey, secretkey, getTestBidTrace(*pubkey, collateral)),
+						secretkey, getTestBidTrace(*pubkey, collateral)),
 				},
 			})
 			if tc.expectError {
@@ -316,7 +284,7 @@ func TestProcessOptimisticBlock(t *testing.T) {
 				},
 				req: &BuilderBlockValidationRequest{
 					BuilderSubmitBlockRequest: common.TestBuilderSubmitBlockRequest(
-						pubkey, secretkey, getTestBidTrace(*pubkey, collateral)),
+						secretkey, getTestBidTrace(*pubkey, collateral)),
 				},
 			})
 
@@ -343,7 +311,7 @@ func TestDemoteBuilder(t *testing.T) {
 	}
 	pubkey, secretkey, backend := startTestBackend(t)
 	pkStr := pubkey.String()
-	req := common.TestBuilderSubmitBlockRequest(pubkey, secretkey, getTestBidTrace(*pubkey, collateral))
+	req := common.TestBuilderSubmitBlockRequest(secretkey, getTestBidTrace(*pubkey, collateral))
 	backend.relay.demoteBuilder(pkStr, &req, errFake)
 
 	// Check status in db.
@@ -369,60 +337,6 @@ func TestUpdateOptimisticSlot(t *testing.T) {
 	require.Equal(t, true, entry.status.IsOptimistic)
 	require.Equal(t, false, entry.status.IsBlacklisted)
 	require.Zero(t, entry.collateral.Cmp(big.NewInt(int64(collateral))))
-}
-
-func TestProposerApiGetPayloadOptimistic(t *testing.T) {
-	testCases := []struct {
-		description string
-		wantStatus  common.BuilderStatus
-		demoted     bool
-	}{
-		{
-			description: "success",
-			wantStatus: common.BuilderStatus{
-				IsOptimistic: true,
-				IsHighPrio:   true,
-			},
-			demoted: false,
-		},
-		{
-			description: "sim_error_refund",
-			wantStatus: common.BuilderStatus{
-				IsOptimistic: false,
-				IsHighPrio:   true,
-			},
-			demoted: true,
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.description, func(t *testing.T) {
-			pubkey, secretkey, backend := startTestBackend(t)
-			pkStr := pubkey.String()
-			// First insert a demotion.
-			if tc.demoted {
-				err := backend.relay.db.InsertBuilderDemotion(&common.BuilderSubmitBlockRequest{
-					Capella: &capella.SubmitBlockRequest{
-						Message: &v1.BidTrace{
-							BuilderPubkey: *pubkey,
-						},
-					},
-				}, errFake)
-				require.NoError(t, err)
-			}
-
-			runOptimisticGetPayload(t, blockRequestOpts{
-				secretkey: secretkey,
-				pubkey:    *pubkey,
-				domain:    backend.relay.opts.EthNetDetails.DomainBeaconProposerCapella,
-			}, backend)
-
-			// Check demotion and refund status'.
-			mockDB := backend.relay.db.(*database.MockDB)
-			require.Equal(t, tc.demoted, mockDB.Demotions[pkStr])
-			require.Equal(t, tc.demoted, mockDB.Refunds[pkStr])
-		})
-	}
 }
 
 func TestBuilderApiSubmitNewBlockOptimistic(t *testing.T) {
