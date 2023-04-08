@@ -1002,7 +1002,7 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 	}
 
 	slotStartTimestamp := api.genesisInfo.Data.GenesisTime + (payload.Slot() * 12)
-	msIntoSlot := uint64(requestTime.UnixMilli()) - (slotStartTimestamp * 1000)
+	msIntoSlot := requestTime.UnixMilli() - int64((slotStartTimestamp * 1000))
 
 	log = log.WithFields(logrus.Fields{
 		"slot":             payload.Slot(),
