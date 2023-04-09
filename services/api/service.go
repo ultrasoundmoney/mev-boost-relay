@@ -1479,9 +1479,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	}
 
 	api.payloadAttributesLock.RLock()
-	fmt.Printf("*** %v\n", payload.ParentHash())
 	attrs, ok := api.payloadAttributes[payload.ParentHash()]
-	fmt.Printf("*** %+v\n", attrs)
 	api.payloadAttributesLock.RUnlock()
 	if !ok || payload.Slot() != attrs.slot {
 		log.Warn("payload attributes not (yet) known")
