@@ -117,14 +117,11 @@ type RelayAPIOpts struct {
 	InternalAPI     bool
 }
 
-type randaoHelper struct {
-	slot       uint64
-	prevRandao string
-}
-
-type withdrawalsHelper struct {
-	slot uint64
-	root phase0.Root
+type payloadAttributesHelper struct {
+	slot              uint64
+	parentHash        string
+	withdrawalsRoot   phase0.Root
+	payloadAttributes beaconclient.PayloadAttributes
 }
 
 // Data needed to issue a block validation request.
@@ -177,22 +174,14 @@ type RelayAPI struct {
 	getPayloadCallsInFlight sync.WaitGroup
 
 	// Feature flags
-	ffForceGetHeader204           bool
-	ffDisableLowPrioBuilders      bool
-	ffDisablePayloadDBStorage     bool // disable storing the execution payloads in the database
-	ffDisableSSEPayloadAttributes bool // instead of SSE, fall back to previous polling withdrawals+prevRandao from our custom Prysm fork
-	ffAllowMemcacheSavingFail     bool // don't fail when saving payloads to memcache doesn't succeed
-	ffLogInvalidSignaturePayload  bool // log payload if getPayload signature validation fails
+	ffForceGetHeader204          bool
+	ffDisableLowPrioBuilders     bool
+	ffDisablePayloadDBStorage    bool // disable storing the execution payloads in the database
+	ffAllowMemcacheSavingFail    bool // don't fail when saving payloads to memcache doesn't succeed
+	ffLogInvalidSignaturePayload bool // log payload if getPayload signature validation fails
 
-	latestParentBlockHash uberatomic.String // used to cache the latest parent block hash, to avoid repetitive similar SSE events
-
-	expectedPrevRandao         randaoHelper
-	expectedPrevRandaoLock     sync.RWMutex
-	expectedPrevRandaoUpdating uint64
-
-	expectedWithdrawalsRoot     withdrawalsHelper
-	expectedWithdrawalsLock     sync.RWMutex
-	expectedWithdrawalsUpdating uint64
+	payloadAttributes     map[string]payloadAttributesHelper // key:parentBlockHash
+	payloadAttributesLock sync.RWMutex
 
 	// The slot we are currently optimistically simulating.
 	optimisticSlot uint64
@@ -251,15 +240,17 @@ func NewRelayAPI(opts RelayAPIOpts) (api *RelayAPI, err error) {
 	}
 
 	api = &RelayAPI{
-		opts:                   opts,
-		log:                    opts.Log,
-		blsSk:                  opts.SecretKey,
-		publicKey:              &publicKey,
-		datastore:              opts.Datastore,
-		beaconClient:           opts.BeaconClient,
-		redis:                  opts.Redis,
-		memcached:              opts.Memcached,
-		db:                     opts.DB,
+		opts:         opts,
+		log:          opts.Log,
+		blsSk:        opts.SecretKey,
+		publicKey:    &publicKey,
+		datastore:    opts.Datastore,
+		beaconClient: opts.BeaconClient,
+		redis:        opts.Redis,
+		memcached:    opts.Memcached,
+		db:           opts.DB,
+
+		payloadAttributes:      make(map[string]payloadAttributesHelper),
 		proposerDutiesResponse: []boostTypes.BuilderGetValidatorsResponseEntry{},
 		blockSimRateLimiter:    NewBlockSimulationRateLimiter(opts.BlockSimURL),
 
@@ -280,11 +271,6 @@ func NewRelayAPI(opts RelayAPIOpts) (api *RelayAPI, err error) {
 	if os.Getenv("DISABLE_PAYLOAD_DATABASE_STORAGE") == "1" {
 		api.log.Warn("env: DISABLE_PAYLOAD_DATABASE_STORAGE - disabling storing payloads in the database")
 		api.ffDisablePayloadDBStorage = true
-	}
-
-	if os.Getenv("DISABLE_SSE_PAYLOAD_ATTRIBUTES") == "1" {
-		api.log.Warn("env: DISABLE_SSE_PAYLOAD_ATTRIBUTES - using previous polling logic for withdrawals and randao (requires custom Prysm fork)")
-		api.ffDisableSSEPayloadAttributes = true
 	}
 
 	if os.Getenv("MEMCACHE_ALLOW_SAVING_FAIL") == "1" {
@@ -452,7 +438,7 @@ func (api *RelayAPI) StartServer() (err error) {
 
 	// Start regular payload attributes updates only if builder-api is enabled
 	// and if using see subscriptions instead of querying for payload attributes
-	if api.opts.BlockBuilderAPI && !api.ffDisableSSEPayloadAttributes {
+	if api.opts.BlockBuilderAPI {
 		go func() {
 			c := make(chan beaconclient.PayloadAttributesEvent)
 			api.beaconClient.SubscribeToPayloadAttributesEvents(c)
@@ -601,52 +587,60 @@ func (api *RelayAPI) processOptimisticBlock(opts blockSimOptions) {
 
 func (api *RelayAPI) processPayloadAttributes(payloadAttributes beaconclient.PayloadAttributesEvent) {
 	apiHeadSlot := api.headSlot.Load()
-	proposalSlot := payloadAttributes.Data.ProposalSlot
+	payloadAttrSlot := payloadAttributes.Data.ProposalSlot
 
 	// require proposal slot in the future
-	if proposalSlot <= apiHeadSlot {
+	if payloadAttrSlot <= apiHeadSlot {
 		return
 	}
 	log := api.log.WithFields(logrus.Fields{
-		"headSlot":     apiHeadSlot,
-		"proposalSlot": proposalSlot,
+		"headSlot":          apiHeadSlot,
+		"payloadAttrSlot":   payloadAttrSlot,
+		"payloadAttrParent": payloadAttributes.Data.ParentBlockHash,
 	})
 
-	// discard repetitive payload attributes (we receive them once from each beacon node)
-	latestParentBlockHash := api.latestParentBlockHash.Load()
-	if latestParentBlockHash == payloadAttributes.Data.ParentBlockHash {
-		return
-	}
-	api.latestParentBlockHash.Store(payloadAttributes.Data.ParentBlockHash)
-	log = log.WithField("parentBlockHash", payloadAttributes.Data.ParentBlockHash)
+	// discard payload attributes if already known
+	api.payloadAttributesLock.RLock()
+	_, ok := api.payloadAttributes[payloadAttributes.Data.ParentBlockHash]
+	api.payloadAttributesLock.RUnlock()
 
-	log.Info("updating payload attributes")
-	api.expectedPrevRandaoLock.Lock()
-	prevRandao := payloadAttributes.Data.PayloadAttributes.PrevRandao
-	api.expectedPrevRandao = randaoHelper{
-		slot:       proposalSlot,
-		prevRandao: prevRandao,
+	if ok {
+		return
 	}
-	api.expectedPrevRandaoLock.Unlock()
-	log.Infof("updated expected prev_randao to %s", prevRandao)
 
-	// Update withdrawals (in Capella only)
-	if api.isBellatrix(proposalSlot) {
-		return
+	var withdrawalsRoot phase0.Root
+	var err error
+	if api.isCapella(payloadAttrSlot) {
+		withdrawalsRoot, err = ComputeWithdrawalsRoot(payloadAttributes.Data.PayloadAttributes.Withdrawals)
+		log = log.WithField("withdrawalsRoot", withdrawalsRoot.String())
+		if err != nil {
+			log.WithError(err).Error("error computing withdrawals root")
+			return
+		}
 	}
-	log.Info("updating expected withdrawals")
-	withdrawalsRoot, err := ComputeWithdrawalsRoot(payloadAttributes.Data.PayloadAttributes.Withdrawals)
-	if err != nil {
-		log.WithError(err).Error("error computing withdrawals root")
-		return
+
+	api.payloadAttributesLock.Lock()
+	defer api.payloadAttributesLock.Unlock()
+
+	// Step 1: clean up old ones
+	for parentBlockHash, attr := range api.payloadAttributes {
+		if attr.slot < apiHeadSlot {
+			delete(api.payloadAttributes, parentBlockHash)
+		}
 	}
-	api.expectedWithdrawalsLock.Lock()
-	api.expectedWithdrawalsRoot = withdrawalsHelper{
-		slot: proposalSlot,
-		root: withdrawalsRoot,
+
+	// Step 2: save new one
+	api.payloadAttributes[payloadAttributes.Data.ParentBlockHash] = payloadAttributesHelper{
+		slot:              payloadAttrSlot,
+		parentHash:        payloadAttributes.Data.ParentBlockHash,
+		withdrawalsRoot:   withdrawalsRoot,
+		payloadAttributes: payloadAttributes.Data.PayloadAttributes,
 	}
-	api.expectedWithdrawalsLock.Unlock()
-	log.Infof("updated expected withdrawals root to %s", withdrawalsRoot)
+
+	log.WithFields(logrus.Fields{
+		"randao":    payloadAttributes.Data.PayloadAttributes.PrevRandao,
+		"timestamp": payloadAttributes.Data.PayloadAttributes.Timestamp,
+	}).Info("updated payload attributes")
 }
 
 func (api *RelayAPI) processNewSlot(headSlot uint64) {
@@ -667,15 +661,6 @@ func (api *RelayAPI) processNewSlot(headSlot uint64) {
 
 	// only for builder-api
 	if api.opts.BlockBuilderAPI {
-		// if not subscribed to payload attributes via sse, query beacon node endpoints
-		if api.ffDisableSSEPayloadAttributes {
-			// query the expected prev_randao field
-			go api.updatedExpectedRandao(headSlot)
-
-			// query expected withdrawals root
-			go api.updatedExpectedWithdrawals(headSlot)
-		}
-
 		// update proposer duties in the background
 		go api.updateProposerDuties(headSlot)
 
@@ -1172,18 +1157,6 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 		return
 	}
 
-	// Check if validator is blocked.
-	// TODO: periodic get all blocked validators and store in memory (in bg goroutine)
-	// blocked, err := api.db.IsValidatorBlocked(pk.String())
-	// if err != nil {
-	// 	log.WithError(err).Error("unable to get validator blocked status")
-	// } else if blocked {
-	// 	log.Warn("validator is blocked")
-	// 	api.RespondError(w, http.StatusBadRequest, "validator is blocked")
-	// 	return
-	// }
-	// log = log.WithField("timestampAfterBlockCheck", time.Now().UTC().UnixMilli())
-
 	// Check whether getPayload has already been called
 	slotLastPayloadDelivered, err := api.redis.GetStatsUint64(datastore.RedisStatsFieldSlotLastPayloadDelivered)
 	if err != nil && !errors.Is(err, redis.Nil) {
@@ -1342,105 +1315,10 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 }
 
 // --------------------
-//  BLOCK BUILDER APIS
+//
+//	BLOCK BUILDER APIS
+//
 // --------------------
-
-// updatedExpectedRandao updates the prev_randao field we expect from builder block submissions
-func (api *RelayAPI) updatedExpectedRandao(slot uint64) {
-	log := api.log.WithField("slot", slot)
-	log.Infof("updating randao...")
-	api.expectedPrevRandaoLock.Lock()
-	latestKnownSlot := api.expectedPrevRandao.slot
-	if slot < latestKnownSlot || slot <= api.expectedPrevRandaoUpdating { // do nothing slot is already known or currently being updated
-		log.Debugf("- abort updating randao, latest: %d, updating: %d", latestKnownSlot, api.expectedPrevRandaoUpdating)
-		api.expectedPrevRandaoLock.Unlock()
-		return
-	}
-	api.expectedPrevRandaoUpdating = slot
-	api.expectedPrevRandaoLock.Unlock()
-
-	// get randao from BN
-	log.Debugf("- querying BN for randao")
-	randao, err := api.beaconClient.GetRandao(slot)
-	if err != nil {
-		log.WithError(err).Error("failed to get randao from beacon node")
-		api.expectedPrevRandaoLock.Lock()
-		api.expectedPrevRandaoUpdating = 0
-		api.expectedPrevRandaoLock.Unlock()
-		return
-	}
-
-	// after request, check if still the latest, then update
-	api.expectedPrevRandaoLock.Lock()
-	defer api.expectedPrevRandaoLock.Unlock()
-	targetSlot := slot + 1
-	log.Debugf("- after BN randao: targetSlot: %d latest: %d", targetSlot, api.expectedPrevRandao.slot)
-
-	// update if still the latest
-	if targetSlot >= api.expectedPrevRandao.slot {
-		api.expectedPrevRandao = randaoHelper{
-			slot:       targetSlot, // the retrieved prev_randao is for the next slot
-			prevRandao: randao.Data.Randao,
-		}
-		log.Infof("updated expected prev_randao to %s for slot %d", randao.Data.Randao, targetSlot)
-	}
-}
-
-// updatedExpectedWithdrawals updates the withdrawals field we expect from builder block submissions
-func (api *RelayAPI) updatedExpectedWithdrawals(slot uint64) {
-	if api.isBellatrix(slot) {
-		return
-	}
-
-	log := api.log.WithField("slot", slot)
-	log.Info("updating withdrawals root...")
-	api.expectedWithdrawalsLock.Lock()
-	latestKnownSlot := api.expectedWithdrawalsRoot.slot
-	if slot < latestKnownSlot || slot <= api.expectedWithdrawalsUpdating { // do nothing slot is already known or currently being updated
-		log.Debugf("- abort updating withdrawals root, latest: %d, updating: %d", latestKnownSlot, api.expectedWithdrawalsUpdating)
-		api.expectedWithdrawalsLock.Unlock()
-		return
-	}
-	api.expectedWithdrawalsUpdating = slot
-	api.expectedWithdrawalsLock.Unlock()
-
-	// get withdrawals from BN
-	log.Debugf("- querying BN for withdrawals for slot %d", slot)
-	withdrawals, err := api.beaconClient.GetWithdrawals(slot)
-	if err != nil {
-		if errors.Is(err, beaconclient.ErrWithdrawalsBeforeCapella) {
-			log.WithError(err).Debug("attempted to fetch withdrawals before capella")
-		} else {
-			log.WithError(err).Error("failed to get withdrawals from beacon node")
-		}
-		api.expectedWithdrawalsLock.Lock()
-		api.expectedWithdrawalsUpdating = 0
-		api.expectedWithdrawalsLock.Unlock()
-		return
-	}
-
-	// after request, check if still the latest, then update
-	api.expectedWithdrawalsLock.Lock()
-	defer api.expectedWithdrawalsLock.Unlock()
-	targetSlot := slot + 1
-	log.Debugf("- after BN withdrawals: targetSlot: %d latest: %d", targetSlot, api.expectedWithdrawalsRoot.slot)
-
-	// update if still the latest
-	if targetSlot >= api.expectedWithdrawalsRoot.slot {
-		withdrawalsRoot, err := ComputeWithdrawalsRoot(withdrawals.Data.Withdrawals)
-		if err != nil {
-			log.WithError(err).Warn("failed to compute withdrawals root")
-			api.expectedWithdrawalsUpdating = 0
-			return
-		}
-		api.expectedWithdrawalsRoot = withdrawalsHelper{
-			slot: targetSlot, // the retrieved withdrawals is for the next slot
-			root: withdrawalsRoot,
-		}
-		log.Infof("updated expected withdrawals root to %s for slot %d", withdrawalsRoot, targetSlot)
-	}
-}
-
 func (api *RelayAPI) handleBuilderGetValidators(w http.ResponseWriter, req *http.Request) {
 	api.proposerDutiesLock.RLock()
 	defer api.proposerDutiesLock.RUnlock()
@@ -1600,39 +1478,34 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 		return
 	}
 
-	// get the latest randao and check its slot
-	api.expectedPrevRandaoLock.RLock()
-	expectedRandao := api.expectedPrevRandao
-	api.expectedPrevRandaoLock.RUnlock()
-	if expectedRandao.slot != payload.Slot() {
-		log.Warn("prev_randao is not known yet")
-		api.RespondError(w, http.StatusInternalServerError, "prev_randao is not known yet")
+	api.payloadAttributesLock.RLock()
+	fmt.Printf("*** %v\n", payload.ParentHash())
+	attrs, ok := api.payloadAttributes[payload.ParentHash()]
+	fmt.Printf("*** %+v\n", attrs)
+	api.payloadAttributesLock.RUnlock()
+	if !ok || payload.Slot() != attrs.slot {
+		log.Warn("payload attributes not (yet) known")
+		api.RespondError(w, http.StatusBadRequest, "payload attributes not (yet) known")
 		return
-	} else if expectedRandao.prevRandao != payload.Random() {
-		msg := fmt.Sprintf("incorrect prev_randao - got: %s, expected: %s", payload.Random(), expectedRandao.prevRandao)
+	}
+
+	if payload.Random() != attrs.payloadAttributes.PrevRandao {
+		msg := fmt.Sprintf("incorrect prev_randao - got: %s, expected: %s", payload.Random(), attrs.payloadAttributes.PrevRandao)
 		log.Info(msg)
 		api.RespondError(w, http.StatusBadRequest, msg)
 		return
 	}
 
-	withdrawals := payload.Withdrawals()
-	if withdrawals != nil {
-		// get latest withdrawals and verify the roots match
-		api.expectedWithdrawalsLock.RLock()
-		expectedWithdrawalsRoot := api.expectedWithdrawalsRoot
-		api.expectedWithdrawalsLock.RUnlock()
+	if api.isCapella(payload.Slot()) { // Capella requires correct withdrawals
 		withdrawalsRoot, err := ComputeWithdrawalsRoot(payload.Withdrawals())
 		if err != nil {
 			log.WithError(err).Warn("could not compute withdrawals root from payload")
 			api.RespondError(w, http.StatusBadRequest, "could not compute withdrawals root")
 			return
 		}
-		if expectedWithdrawalsRoot.slot != payload.Slot() {
-			log.Warn("withdrawals are not known yet")
-			api.RespondError(w, http.StatusInternalServerError, "withdrawals are not known yet")
-			return
-		} else if expectedWithdrawalsRoot.root != withdrawalsRoot {
-			msg := fmt.Sprintf("incorrect withdrawals root - got: %s, expected: %s", withdrawalsRoot.String(), expectedWithdrawalsRoot.root.String())
+
+		if withdrawalsRoot != attrs.withdrawalsRoot {
+			msg := fmt.Sprintf("incorrect withdrawals root - got: %s, expected: %s", withdrawalsRoot.String(), attrs.withdrawalsRoot.String())
 			log.Info(msg)
 			api.RespondError(w, http.StatusBadRequest, msg)
 			return

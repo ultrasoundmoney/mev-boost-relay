@@ -33,6 +33,7 @@ const (
 	collateral  = 1000
 	builderID   = "builder0x69"
 	randao      = "01234567890123456789012345678901"
+	emptyHash   = "0x0000000000000000000000000000000000000000000000000000000000000000"
 	proposerInd = uint64(987)
 	genesis     = 1606824023
 )
@@ -80,19 +81,6 @@ func startTestBackend(t *testing.T) (*phase0.BLSPubKey, *bls.SecretKey, *testBac
 
 	// Setup test backend.
 	backend := newTestBackend(t, 1)
-	var randaoHash boostTypes.Hash
-	err = randaoHash.FromSlice([]byte(randao))
-	require.NoError(t, err)
-	backend.relay.expectedPrevRandao = randaoHelper{
-		slot:       slot,
-		prevRandao: randaoHash.String(),
-	}
-	withRoot, err := ComputeWithdrawalsRoot([]*consensuscapella.Withdrawal{})
-	require.NoError(t, err)
-	backend.relay.expectedWithdrawalsRoot = withdrawalsHelper{
-		slot: slot,
-		root: withRoot,
-	}
 	backend.relay.genesisInfo = &beaconclient.GetGenesisResponse{}
 	backend.relay.genesisInfo.Data.GenesisTime = 0
 	backend.relay.proposerDutiesMap = map[uint64]*boostTypes.RegisterValidatorRequestMessage{
@@ -398,6 +386,18 @@ func TestBuilderApiSubmitNewBlockOptimistic(t *testing.T) {
 		t.Run(tc.description, func(t *testing.T) {
 			pubkey, secretkey, backend := startTestBackend(t)
 			backend.relay.optimisticSlot = slot
+			var randaoHash boostTypes.Hash
+			err := randaoHash.FromSlice([]byte(randao))
+			require.NoError(t, err)
+			withRoot, err := ComputeWithdrawalsRoot([]*consensuscapella.Withdrawal{})
+			require.NoError(t, err)
+			backend.relay.payloadAttributes[emptyHash] = payloadAttributesHelper{
+				slot:            slot,
+				withdrawalsRoot: withRoot,
+				payloadAttributes: beaconclient.PayloadAttributes{
+					PrevRandao: randaoHash.String(),
+				},
+			}
 			pkStr := pubkey.String()
 			rr := runOptimisticBlockSubmission(t, blockRequestOpts{
 				secretkey:  secretkey,
