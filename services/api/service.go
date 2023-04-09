@@ -981,7 +981,7 @@ func (api *RelayAPI) handleGetHeader(w http.ResponseWriter, req *http.Request) {
 
 	requestTime := time.Now().UTC()
 	slotStartTimestamp := api.genesisInfo.Data.GenesisTime + (slot * 12)
-	msIntoSlot := uint64(requestTime.UnixMilli()) - (slotStartTimestamp * 1000)
+	msIntoSlot := requestTime.UnixMilli() - int64((slotStartTimestamp * 1000))
 
 	log := api.log.WithFields(logrus.Fields{
 		"method":           "getHeader",
@@ -1025,7 +1025,7 @@ func (api *RelayAPI) handleGetHeader(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// Only allow requests for the current slot until a certain cutoff time
-	if getPayloadRequestCutoffMs > 0 && msIntoSlot > 0 && msIntoSlot > uint64(getPayloadRequestCutoffMs) {
+	if getPayloadRequestCutoffMs > 0 && msIntoSlot > 0 && msIntoSlot > int64(getPayloadRequestCutoffMs) {
 		log.Info("getHeader sent too late")
 		api.RespondError(w, http.StatusBadRequest, fmt.Sprintf("sent too late - %d ms into slot", msIntoSlot))
 		return
@@ -1107,7 +1107,7 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 	// Take time after the decoding, and add to logging
 	requestTime := time.Now().UTC()
 	slotStartTimestamp := api.genesisInfo.Data.GenesisTime + (payload.Slot() * 12)
-	msIntoSlot := uint64(requestTime.UnixMilli()) - (slotStartTimestamp * 1000)
+	msIntoSlot := requestTime.UnixMilli() - int64((slotStartTimestamp * 1000))
 	log = log.WithFields(logrus.Fields{
 		"slot":                 payload.Slot(),
 		"blockHash":            payload.BlockHash(),
@@ -1166,7 +1166,7 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 	log.Info("getPayload request received")
 
 	// Only allow getPayload requests for the current slot until a certain cutoff time
-	if getPayloadRequestCutoffMs > 0 && msIntoSlot > 0 && msIntoSlot > uint64(getPayloadRequestCutoffMs) {
+	if getPayloadRequestCutoffMs > 0 && msIntoSlot > 0 && msIntoSlot > int64(getPayloadRequestCutoffMs) {
 		log.Warn("getPayload sent too late")
 		api.RespondError(w, http.StatusBadRequest, fmt.Sprintf("sent too late - %d ms into slot", msIntoSlot))
 		return
