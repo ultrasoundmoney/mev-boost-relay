@@ -179,6 +179,7 @@ type RelayAPI struct {
 	ffDisablePayloadDBStorage    bool // disable storing the execution payloads in the database
 	ffAllowMemcacheSavingFail    bool // don't fail when saving payloads to memcache doesn't succeed
 	ffLogInvalidSignaturePayload bool // log payload if getPayload signature validation fails
+	ffRejectPrysmGetHeader       bool
 
 	payloadAttributes     map[string]payloadAttributesHelper // key:parentBlockHash
 	payloadAttributesLock sync.RWMutex
@@ -283,6 +284,7 @@ func NewRelayAPI(opts RelayAPIOpts) (api *RelayAPI, err error) {
 		api.ffLogInvalidSignaturePayload = true
 	}
 
+	api.ffRejectPrysmGetHeader = true
 	return api, nil
 }
 
@@ -956,6 +958,11 @@ func (api *RelayAPI) handleGetHeader(w http.ResponseWriter, req *http.Request) {
 	parentHashHex := vars["parent_hash"]
 	proposerPubkeyHex := vars["pubkey"]
 	ua := req.UserAgent()
+	if api.ffRejectPrysmGetHeader && ua == "mev-boost/v1.5.0 Go-http-client/1.1" {
+		api.log.Info("rejecting getHeader from prysm client")
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	headSlot := api.headSlot.Load()
 
 	slot, err := strconv.ParseUint(slotStr, 10, 64)
