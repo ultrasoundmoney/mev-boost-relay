@@ -21,7 +21,6 @@ import (
 	"github.com/flashbots/mev-boost-relay/database/vars"
 	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/require"
-	blst "github.com/supranational/blst/bindings/go"
 )
 
 const (
@@ -59,23 +58,26 @@ func createValidatorRegistration(pubKey string) ValidatorRegistrationEntry {
 	}
 }
 
-func getTestKeyPair(t *testing.T) (*phase0.BLSPubKey, *blst.SecretKey) {
+func getTestKeyPair(t *testing.T) (*phase0.BLSPubKey, *bls.SecretKey) {
 	sk, _, err := bls.GenerateNewKeypair()
 	require.NoError(t, err)
-	blsPubkey := bls.PublicKeyFromSecretKey(sk)
+	blsPubkey, err := bls.PublicKeyFromSecretKey(sk)
+	require.NoError(t, err)
 	var pubkey phase0.BLSPubKey
-	pkSlice := blsPubkey.Compress()
-	copy(pubkey[:], pkSlice[:])
+	bytes := blsPubkey.Bytes()
+	copy(pubkey[:], bytes[:])
 	return &pubkey, sk
 }
 
 func insertTestBuilder(t *testing.T, db IDatabaseService) string {
 	pk, sk := getTestKeyPair(t)
+	// pk, err := types.BlsPublicKeyToPublicKey(blsPubkey)
+	// require.NoError(t, err)
 	var testBlockHash phase0.Hash32
 	hashSlice, err := hexutil.Decode(blockHashStr)
 	require.NoError(t, err)
 	copy(testBlockHash[:], hashSlice)
-	req := common.TestBuilderSubmitBlockRequest(pk, sk, &common.BidTraceV2{
+	req := common.TestBuilderSubmitBlockRequest(sk, &common.BidTraceV2{
 		BidTrace: v1.BidTrace{
 			BlockHash:            testBlockHash,
 			Slot:                 slot,
@@ -85,7 +87,7 @@ func insertTestBuilder(t *testing.T, db IDatabaseService) string {
 			Value:                uint256.NewInt(collateral),
 		},
 	})
-	entry, err := db.SaveBuilderBlockSubmission(&req, nil, time.Now(), time.Now().Add(time.Second), profile, optimisticSubmission)
+	entry, err := db.SaveBuilderBlockSubmission(&req, nil, time.Now(), time.Now().Add(time.Second), true, profile, optimisticSubmission)
 	require.NoError(t, err)
 	err = db.UpsertBlockBuilderEntryAfterSubmission(entry, false)
 	require.NoError(t, err)
@@ -292,7 +294,7 @@ func TestInsertBuilderDemotion(t *testing.T) {
 			Value:                uint256.NewInt(collateral),
 		},
 	}
-	req := common.TestBuilderSubmitBlockRequest(pk, sk, trace)
+	req := common.TestBuilderSubmitBlockRequest(sk, trace)
 	err = db.InsertBuilderDemotion(&req, errFoo)
 	require.NoError(t, err)
 
@@ -320,7 +322,7 @@ func TestUpdateBuilderDemotion(t *testing.T) {
 			Value:                uint256.NewInt(collateral),
 		},
 	}
-	req := common.TestBuilderSubmitBlockRequest(pk, sk, bt)
+	req := common.TestBuilderSubmitBlockRequest(sk, bt)
 	// Should return ErrNoRows because there is no demotion yet.
 	demotion, err := db.GetBuilderDemotion(bt)
 	require.Equal(t, sql.ErrNoRows, err)

@@ -32,18 +32,20 @@ type GetPayloadResponseKey struct {
 type Datastore struct {
 	log *logrus.Entry
 
-	redis *RedisCache
-	db    database.IDatabaseService
+	redis     *RedisCache
+	memcached *Memcached
+	db        database.IDatabaseService
 
 	knownValidatorsByPubkey map[types.PubkeyHex]uint64
 	knownValidatorsByIndex  map[uint64]types.PubkeyHex
 	knownValidatorsLock     sync.RWMutex
 }
 
-func NewDatastore(log *logrus.Entry, redisCache *RedisCache, db database.IDatabaseService) (ds *Datastore, err error) {
+func NewDatastore(log *logrus.Entry, redisCache *RedisCache, memcached *Memcached, db database.IDatabaseService) (ds *Datastore, err error) {
 	ds = &Datastore{
 		log:                     log.WithField("component", "datastore"),
 		db:                      db,
+		memcached:               memcached,
 		redis:                   redisCache,
 		knownValidatorsByPubkey: make(map[types.PubkeyHex]uint64),
 		knownValidatorsByIndex:  make(map[uint64]types.PubkeyHex),
@@ -54,21 +56,21 @@ func NewDatastore(log *logrus.Entry, redisCache *RedisCache, db database.IDataba
 
 // RefreshKnownValidators loads known validators from Redis into memory
 func (ds *Datastore) RefreshKnownValidators() (cnt int, err error) {
-	knownValidators, err := ds.redis.GetKnownValidators()
+	knownValidatorsByIndex, err := ds.redis.GetKnownValidators()
 	if err != nil {
 		return 0, err
 	}
 
-	knownValidatorsByIndex := make(map[uint64]types.PubkeyHex)
-	for pubkey, index := range knownValidators {
-		knownValidatorsByIndex[index] = pubkey
+	knownValidatorsByPubkey := make(map[types.PubkeyHex]uint64)
+	for index, pubkey := range knownValidatorsByIndex {
+		knownValidatorsByPubkey[pubkey] = index
 	}
 
 	ds.knownValidatorsLock.Lock()
 	defer ds.knownValidatorsLock.Unlock()
-	ds.knownValidatorsByPubkey = knownValidators
+	ds.knownValidatorsByPubkey = knownValidatorsByPubkey
 	ds.knownValidatorsByIndex = knownValidatorsByIndex
-	return len(knownValidators), nil
+	return len(knownValidatorsByIndex), nil
 }
 
 func (ds *Datastore) IsKnownValidator(pubkeyHex types.PubkeyHex) bool {
@@ -121,22 +123,34 @@ func (ds *Datastore) GetGetPayloadResponse(slot uint64, proposerPubkey, blockHas
 	// 1. try to get from Redis
 	resp, err := ds.redis.GetExecutionPayload(slot, _proposerPubkey, _blockHash)
 	if err != nil {
-		ds.log.WithError(err).Error("error getting getPayload response from redis")
+		ds.log.WithError(err).Error("error getting execution payload from redis")
 	} else {
 		ds.log.Debug("getPayload response from redis")
 		return resp, nil
 	}
 
-	// 2. try to get from database
-	blockSubEntry, err := ds.db.GetExecutionPayloadEntryBySlotPkHash(slot, proposerPubkey, blockHash)
+	// 2. try to get from Memcached
+	if ds.memcached != nil {
+		resp, err = ds.memcached.GetExecutionPayload(slot, _proposerPubkey, _blockHash)
+		if err != nil {
+			ds.log.WithError(err).Error("error getting execution payload from memcached")
+		} else if resp != nil {
+			ds.log.Debug("getPayload response from memcached")
+			return resp, nil
+		}
+	}
+
+	// 3. try to get from database (should not happen, it's just a backup)
+	executionPayloadEntry, err := ds.db.GetExecutionPayloadEntryBySlotPkHash(slot, proposerPubkey, blockHash)
 	if err != nil {
+		ds.log.WithError(err).Error("error getting execution payload from database")
 		return nil, err
 	}
 
-	ds.log.Debug("getPayload response from database")
-	// deserialize execution payload
+	// Got it from databaase, now deserialize execution payload and compile full response
+	ds.log.Warn("getPayload response from database, primary storage failed")
 	var res consensusspec.DataVersion
-	err = json.Unmarshal([]byte(blockSubEntry.Version), &res)
+	err = json.Unmarshal([]byte(executionPayloadEntry.Version), &res)
 	if err != nil {
 		ds.log.Debug("invalid getPayload version from database")
 		return nil, err
@@ -144,7 +158,7 @@ func (ds *Datastore) GetGetPayloadResponse(slot uint64, proposerPubkey, blockHas
 	switch res {
 	case consensusspec.DataVersionCapella:
 		executionPayload := new(capella.ExecutionPayload)
-		err = json.Unmarshal([]byte(blockSubEntry.Payload), executionPayload)
+		err = json.Unmarshal([]byte(executionPayloadEntry.Payload), executionPayload)
 		if err != nil {
 			return nil, err
 		}
@@ -159,7 +173,7 @@ func (ds *Datastore) GetGetPayloadResponse(slot uint64, proposerPubkey, blockHas
 		}, nil
 	case consensusspec.DataVersionBellatrix:
 		executionPayload := new(types.ExecutionPayload)
-		err = json.Unmarshal([]byte(blockSubEntry.Payload), executionPayload)
+		err = json.Unmarshal([]byte(executionPayloadEntry.Payload), executionPayload)
 		if err != nil {
 			return nil, err
 		}

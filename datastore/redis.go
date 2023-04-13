@@ -165,27 +165,23 @@ func (r *RedisCache) HSetObj(key, field string, value any, expiration time.Durat
 	return r.client.Expire(context.Background(), key, expiration).Err()
 }
 
-func (r *RedisCache) GetKnownValidators() (map[boostTypes.PubkeyHex]uint64, error) {
-	validators := make(map[boostTypes.PubkeyHex]uint64)
+func (r *RedisCache) GetKnownValidators() (map[uint64]boostTypes.PubkeyHex, error) {
+	validators := make(map[uint64]boostTypes.PubkeyHex)
 	entries, err := r.client.HGetAll(context.Background(), r.keyKnownValidators).Result()
 	if err != nil {
 		return nil, err
 	}
-	for pubkey, proposerIndexStr := range entries {
+	for proposerIndexStr, pubkey := range entries {
 		proposerIndex, err := strconv.ParseUint(proposerIndexStr, 10, 64)
 		if err == nil {
-			validators[boostTypes.PubkeyHex(pubkey)] = proposerIndex
+			validators[proposerIndex] = boostTypes.PubkeyHex(pubkey)
 		}
 	}
 	return validators, nil
 }
 
 func (r *RedisCache) SetKnownValidator(pubkeyHex boostTypes.PubkeyHex, proposerIndex uint64) error {
-	return r.client.HSet(context.Background(), r.keyKnownValidators, PubkeyHexToLowerStr(pubkeyHex), proposerIndex).Err()
-}
-
-func (r *RedisCache) SetKnownValidatorNX(pubkeyHex boostTypes.PubkeyHex, proposerIndex uint64) error {
-	return r.client.HSetNX(context.Background(), r.keyKnownValidators, PubkeyHexToLowerStr(pubkeyHex), proposerIndex).Err()
+	return r.client.HSet(context.Background(), r.keyKnownValidators, proposerIndex, PubkeyHexToLowerStr(pubkeyHex)).Err()
 }
 
 func (r *RedisCache) GetValidatorRegistrationTimestamp(proposerPubkey boostTypes.PubkeyHex) (uint64, error) {
@@ -246,6 +242,17 @@ func (r *RedisCache) SetStats(field string, value any) (err error) {
 
 func (r *RedisCache) GetStats(field string) (value string, err error) {
 	return r.client.HGet(context.Background(), r.keyStats, field).Result()
+}
+
+// GetStatsUint64 returns (valueUint64, nil), or (0, redis.Nil) if the field does not exist
+func (r *RedisCache) GetStatsUint64(field string) (value uint64, err error) {
+	valStr, err := r.client.HGet(context.Background(), r.keyStats, field).Result()
+	if err != nil {
+		return 0, err
+	}
+
+	value, err = strconv.ParseUint(valStr, 10, 64)
+	return value, err
 }
 
 func (r *RedisCache) SetProposerDuties(proposerDuties []boostTypes.BuilderGetValidatorsResponseEntry) (err error) {

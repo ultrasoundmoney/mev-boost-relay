@@ -39,7 +39,7 @@ func newTestBackend(t require.TestingT, numBeaconNodes int) *testBackend {
 
 	db := database.MockDB{}
 
-	ds, err := datastore.NewDatastore(common.TestLog, redisCache, db)
+	ds, err := datastore.NewDatastore(common.TestLog, redisCache, nil, db)
 	require.NoError(t, err)
 
 	sk, _, err := bls.GenerateNewKeypair()
@@ -107,10 +107,10 @@ func generateSignedValidatorRegistration(sk *bls.SecretKey, feeRecipient types.A
 		}
 	}
 
-	blsPubKey := bls.PublicKeyFromSecretKey(sk)
+	blsPubKey, _ := bls.PublicKeyFromSecretKey(sk)
 
 	var pubKey types.PublicKey
-	err = pubKey.FromSlice(blsPubKey.Compress())
+	err = pubKey.FromSlice(bls.PublicKeyToBytes(blsPubKey))
 	if err != nil {
 		return nil, err
 	}
