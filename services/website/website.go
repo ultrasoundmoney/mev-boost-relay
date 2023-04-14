@@ -149,7 +149,7 @@ func (srv *Webserver) StartServer() (err error) {
 
 func (srv *Webserver) getRouter() http.Handler {
 	r := mux.NewRouter()
-	r.HandleFunc("/", srv.handleRoot).Methods(http.MethodGet)
+	r.HandleFunc("/classic-ui", srv.handleRoot).Methods(http.MethodGet)
 	if EnablePprof {
 		srv.log.Info("pprof API enabled")
 		r.PathPrefix("/debug/pprof/").Handler(http.DefaultServeMux)
