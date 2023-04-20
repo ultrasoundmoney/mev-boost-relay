@@ -36,7 +36,7 @@ type IDatabaseService interface {
 	GetExecutionPayloads(idFirst, idLast uint64) (entries []*ExecutionPayloadEntry, err error)
 	DeleteExecutionPayloads(idFirst, idLast uint64) error
 
-	SaveDeliveredPayload(bidTrace *common.BidTraceV2, signedBlindedBeaconBlock *common.SignedBlindedBeaconBlock, signedAt time.Time) error
+	SaveDeliveredPayload(bidTrace *common.BidTraceV2, signedBlindedBeaconBlock *common.SignedBlindedBeaconBlock, signedAt time.Time, publishMs uint64) error
 	GetNumDeliveredPayloads() (uint64, error)
 	GetRecentDeliveredPayloads(filters GetPayloadsFilters) ([]*DeliveredPayloadEntry, error)
 	GetDeliveredPayloads(idFirst, idLast uint64) (entries []*DeliveredPayloadEntry, err error)
@@ -52,9 +52,8 @@ type IDatabaseService interface {
 	UpdateBuilderDemotion(trace *common.BidTraceV2, signedBlock *common.SignedBeaconBlock, signedRegistration *types.SignedValidatorRegistration) error
 	GetBuilderDemotion(trace *common.BidTraceV2) (*BuilderDemotionEntry, error)
 
-	InsertBlockedValidator(entry BlockedValidatorEntry) error
-	GetBlockedValidator(pubkey string) (*BlockedValidatorEntry, error)
-	IsValidatorBlocked(pubkey string) (bool, error)
+	GetTooLateGetPayload(slot uint64) (entries []*TooLateGetPayloadEntry, err error)
+	InsertTooLateGetPayload(slot uint64, proposerPubkey, blockHash string, slotStart, requestTime, decodeTime, msIntoSlot uint64) error
 }
 
 type DatabaseService struct {
@@ -261,7 +260,7 @@ func (s *DatabaseService) GetExecutionPayloadEntryBySlotPkHash(slot uint64, prop
 	return entry, err
 }
 
-func (s *DatabaseService) SaveDeliveredPayload(bidTrace *common.BidTraceV2, signedBlindedBeaconBlock *common.SignedBlindedBeaconBlock, signedAt time.Time) error {
+func (s *DatabaseService) SaveDeliveredPayload(bidTrace *common.BidTraceV2, signedBlindedBeaconBlock *common.SignedBlindedBeaconBlock, signedAt time.Time, publishMs uint64) error {
 	_signedBlindedBeaconBlock, err := json.Marshal(signedBlindedBeaconBlock)
 	if err != nil {
 		return err
@@ -287,11 +286,13 @@ func (s *DatabaseService) SaveDeliveredPayload(bidTrace *common.BidTraceV2, sign
 
 		NumTx: bidTrace.NumTx,
 		Value: bidTrace.Value.ToBig().String(),
+
+		PublishMs: publishMs,
 	}
 
 	query := `INSERT INTO ` + vars.TableDeliveredPayload + `
-		(signed_at, signed_blinded_beacon_block, slot, epoch, builder_pubkey, proposer_pubkey, proposer_fee_recipient, parent_hash, block_hash, block_number, gas_used, gas_limit, num_tx, value) VALUES
-		(:signed_at, :signed_blinded_beacon_block, :slot, :epoch, :builder_pubkey, :proposer_pubkey, :proposer_fee_recipient, :parent_hash, :block_hash, :block_number, :gas_used, :gas_limit, :num_tx, :value)
+		(signed_at, signed_blinded_beacon_block, slot, epoch, builder_pubkey, proposer_pubkey, proposer_fee_recipient, parent_hash, block_hash, block_number, gas_used, gas_limit, num_tx, value, publish_ms) VALUES
+		(:signed_at, :signed_blinded_beacon_block, :slot, :epoch, :builder_pubkey, :proposer_pubkey, :proposer_fee_recipient, :parent_hash, :block_hash, :block_number, :gas_used, :gas_limit, :num_tx, :value, :publish_ms)
 		ON CONFLICT DO NOTHING`
 	_, err = s.DB.NamedExec(query, deliveredPayloadEntry)
 	return err
@@ -308,7 +309,7 @@ func (s *DatabaseService) GetRecentDeliveredPayloads(queryArgs GetPayloadsFilter
 		"builder_pubkey":  queryArgs.BuilderPubkey,
 	}
 
-	fields := "id, inserted_at, signed_at, slot, epoch, builder_pubkey, proposer_pubkey, proposer_fee_recipient, parent_hash, block_hash, block_number, num_tx, value, gas_used, gas_limit"
+	fields := "id, inserted_at, signed_at, slot, epoch, builder_pubkey, proposer_pubkey, proposer_fee_recipient, parent_hash, block_hash, block_number, num_tx, value, gas_used, gas_limit, publish_ms"
 
 	whereConds := []string{}
 	if queryArgs.Slot > 0 {
@@ -362,7 +363,7 @@ func (s *DatabaseService) GetRecentDeliveredPayloads(queryArgs GetPayloadsFilter
 }
 
 func (s *DatabaseService) GetDeliveredPayloads(idFirst, idLast uint64) (entries []*DeliveredPayloadEntry, err error) {
-	query := `SELECT id, inserted_at, signed_at, slot, epoch, builder_pubkey, proposer_pubkey, proposer_fee_recipient, parent_hash, block_hash, block_number, num_tx, value, gas_used, gas_limit
+	query := `SELECT id, inserted_at, signed_at, slot, epoch, builder_pubkey, proposer_pubkey, proposer_fee_recipient, parent_hash, block_hash, block_number, num_tx, value, gas_used, gas_limit, publish_ms 
 	FROM ` + vars.TableDeliveredPayload + `
 	WHERE id >= $1 AND id <= $2
 	ORDER BY slot ASC`
@@ -608,4 +609,29 @@ func (s *DatabaseService) IsValidatorBlocked(pubkey string) (bool, error) {
 		return false, err
 	}
 	return entry.Blocked, nil
+}
+
+func (s *DatabaseService) GetTooLateGetPayload(slot uint64) (entries []*TooLateGetPayloadEntry, err error) {
+	query := `SELECT id, inserted_at, slot, slot_start_timestamp, request_timestamp, decode_timestamp, proposer_pubkey, block_hash, ms_into_slot FROM ` + vars.TableTooLateGetPayload + ` WHERE slot = $1`
+	err = s.DB.Select(&entries, query, slot)
+	return entries, err
+}
+
+func (s *DatabaseService) InsertTooLateGetPayload(slot uint64, proposerPubkey, blockHash string, slotStart, requestTime, decodeTime, msIntoSlot uint64) error {
+	entry := TooLateGetPayloadEntry{
+		Slot:               slot,
+		SlotStartTimestamp: slotStart,
+		RequestTimestamp:   requestTime,
+		DecodeTimestamp:    decodeTime,
+		ProposerPubkey:     proposerPubkey,
+		BlockHash:          blockHash,
+		MsIntoSlot:         msIntoSlot,
+	}
+
+	query := `INSERT INTO ` + vars.TableTooLateGetPayload + `
+		(slot, slot_start_timestamp, request_timestamp, decode_timestamp, proposer_pubkey, block_hash, ms_into_slot) VALUES
+		(:slot, :slot_start_timestamp, :request_timestamp, :decode_timestamp, :proposer_pubkey, :block_hash, :ms_into_slot)
+		ON CONFLICT (slot, proposer_pubkey, block_hash) DO NOTHING;`
+	_, err := s.DB.NamedExec(query, entry)
+	return err
 }

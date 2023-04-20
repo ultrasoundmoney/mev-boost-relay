@@ -392,28 +392,40 @@ func TestGetBuilderSubmissions(t *testing.T) {
 	require.Equal(t, fmt.Sprint(collateral), e.Value)
 }
 
-func TestBlockedValidator(t *testing.T) {
+func TestUpsertTooLateGetPayload(t *testing.T) {
 	db := resetDatabase(t)
-
-	testValidator := BlockedValidatorEntry{
-		Pubkey:  "0x8996515293fcd87ca09b5c6ffe5c17f043c6a1a3639cc9494a82ec8eb50a9b55c34b47675e573be40d9be308b1ca2908",
-		Blocked: true,
-		Notes:   "evil actor",
-	}
-	err := db.InsertBlockedValidator(testValidator)
+	slot := uint64(12345)
+	pk := "0x8996515293fcd87ca09b5c6ffe5c17f043c6a1a3639cc9494a82ec8eb50a9b55c34b47675e573be40d9be308b1ca2908"
+	hash := "0x00bb8996515293fcd87ca09b5c6ffe5c17f043c600bb8996515293fcd8012343"
+	ms := uint64(4001)
+	err := db.InsertTooLateGetPayload(slot, pk, hash, 1, 2, 3, ms)
 	require.NoError(t, err)
 
-	out, err := db.GetBlockedValidator(testValidator.Pubkey)
+	entries, err := db.GetTooLateGetPayload(slot)
 	require.NoError(t, err)
-	require.Equal(t, testValidator.Pubkey, out.Pubkey)
-	require.Equal(t, testValidator.Blocked, out.Blocked)
-	require.Equal(t, testValidator.Notes, out.Notes)
+	require.Equal(t, 1, len(entries))
+	entry := entries[0]
+	require.Equal(t, pk, entry.ProposerPubkey)
+	require.Equal(t, hash, entry.BlockHash)
+	require.Equal(t, ms, entry.MsIntoSlot)
 
-	blocked, err := db.IsValidatorBlocked(testValidator.Pubkey)
+	// Duplicate.
+	err = db.InsertTooLateGetPayload(slot, pk, hash, 1, 2, 3, ms+1)
 	require.NoError(t, err)
-	require.True(t, blocked)
+	entries, err = db.GetTooLateGetPayload(slot)
+	require.NoError(t, err)
+	// Check ms was not updated (we only want to save the first).
+	require.Equal(t, ms, entries[0].MsIntoSlot)
 
-	blocked, err = db.IsValidatorBlocked("0x0")
+	// New block hash (to save equivocations).
+	hash2 := "0xFFbb8996515293fcd87ca09b5c6ffe5c17f043c600bb8996515293fcd8012343"
+	err = db.InsertTooLateGetPayload(slot, pk, hash2, 1, 2, 3, ms)
+
 	require.NoError(t, err)
-	require.False(t, blocked)
+
+	entries, err = db.GetTooLateGetPayload(slot)
+	require.NoError(t, err)
+	require.Equal(t, 2, len(entries))
+	entry = entries[1]
+	require.Equal(t, hash2, entry.BlockHash)
 }

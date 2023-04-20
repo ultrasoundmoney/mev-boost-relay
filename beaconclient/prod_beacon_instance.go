@@ -182,8 +182,9 @@ type ProposerDutiesResponse struct {
 }
 
 type ProposerDutiesResponseData struct {
-	Pubkey string `json:"pubkey"`
-	Slot   uint64 `json:"slot,string"`
+	Slot           uint64 `json:"slot,string"`
+	Pubkey         string `json:"pubkey"`
+	ValidatorIndex uint64 `json:"validator_index,string"`
 }
 
 // GetProposerDuties returns proposer duties for every slot in this epoch
@@ -264,11 +265,13 @@ func (c *ProdBeaconInstance) PublishBlock(block *common.SignedBeaconBlock) (code
 }
 
 type GetGenesisResponse struct {
-	Data struct {
-		GenesisTime           uint64 `json:"genesis_time,string"`
-		GenesisValidatorsRoot string `json:"genesis_validators_root"`
-		GenesisForkVersion    string `json:"genesis_fork_version"`
-	}
+	Data GetGenesisResponseData `json:"data"`
+}
+
+type GetGenesisResponseData struct {
+	GenesisTime           uint64 `json:"genesis_time,string"`
+	GenesisValidatorsRoot string `json:"genesis_validators_root"`
+	GenesisForkVersion    string `json:"genesis_fork_version"`
 }
 
 // GetGenesis returns the genesis info - https://ethereum.github.io/beacon-APIs/#/Beacon/getGenesis

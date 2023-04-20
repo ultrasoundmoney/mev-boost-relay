@@ -14,6 +14,7 @@ import (
 
 	"github.com/flashbots/go-utils/cli"
 	"github.com/flashbots/go-utils/jsonrpc"
+	"github.com/flashbots/mev-boost-relay/common"
 )
 
 var (
@@ -47,7 +48,7 @@ func NewBlockSimulationRateLimiter(blockSimURL string) *BlockSimulationRateLimit
 	}
 }
 
-func (b *BlockSimulationRateLimiter) send(context context.Context, payload *BuilderBlockValidationRequest, isHighPrio bool) error {
+func (b *BlockSimulationRateLimiter) send(context context.Context, payload *common.BuilderBlockValidationRequest, isHighPrio bool) error {
 	b.cv.L.Lock()
 	cnt := atomic.AddInt64(&b.counter, 1)
 	if maxConcurrentBlocks > 0 && cnt > maxConcurrentBlocks {

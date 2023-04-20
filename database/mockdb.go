@@ -78,7 +78,7 @@ func (db MockDB) GetBuilderSubmissionsBySlots(slotFrom, slotTo uint64) (entries 
 	return nil, nil
 }
 
-func (db MockDB) SaveDeliveredPayload(bidTrace *common.BidTraceV2, signedBlindedBeaconBlock *common.SignedBlindedBeaconBlock, signedAt time.Time) error {
+func (db MockDB) SaveDeliveredPayload(bidTrace *common.BidTraceV2, signedBlindedBeaconBlock *common.SignedBlindedBeaconBlock, signedAt time.Time, publishMs uint64) error {
 	return nil
 }
 
@@ -174,14 +174,10 @@ func (db MockDB) GetBuilderDemotion(trace *common.BidTraceV2) (*BuilderDemotionE
 	return nil, nil
 }
 
-func (db MockDB) InsertBlockedValidator(entry BlockedValidatorEntry) error {
-	return nil
-}
-
-func (db MockDB) GetBlockedValidator(pubkey string) (*BlockedValidatorEntry, error) {
+func (db MockDB) GetTooLateGetPayload(slot uint64) (entries []*TooLateGetPayloadEntry, err error) {
 	return nil, nil
 }
 
-func (db MockDB) IsValidatorBlocked(pubkey string) (bool, error) {
-	return false, nil
+func (db MockDB) InsertTooLateGetPayload(slot uint64, proposerPubkey, blockHash string, slotStart, requestTime, decodeTime, msIntoSlot uint64) error {
+	return nil
 }

@@ -3,6 +3,8 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -18,10 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var (
-	genesisForkVersionHex = "0x00000000"
-	builderSigningDomain  = types.Domain([32]byte{0, 0, 0, 1, 245, 165, 253, 66, 209, 106, 32, 48, 39, 152, 239, 110, 211, 9, 151, 155, 67, 0, 61, 35, 32, 217, 240, 232, 234, 152, 49, 169})
-)
+var builderSigningDomain = types.Domain([32]byte{0, 0, 0, 1, 245, 165, 253, 66, 209, 106, 32, 48, 39, 152, 239, 110, 211, 9, 151, 155, 67, 0, 61, 35, 32, 217, 240, 232, 234, 152, 49, 169})
 
 type testBackend struct {
 	t         require.TestingT
@@ -45,22 +44,17 @@ func newTestBackend(t require.TestingT, numBeaconNodes int) *testBackend {
 	sk, _, err := bls.GenerateNewKeypair()
 	require.NoError(t, err)
 
+	mainnetDetails, err := common.NewEthNetworkDetails(common.EthNetworkMainnet)
+	require.NoError(t, err)
+
 	opts := RelayAPIOpts{
-		Log:          common.TestLog,
-		ListenAddr:   "localhost:12345",
-		BeaconClient: &beaconclient.MultiBeaconClient{},
-		Datastore:    ds,
-		Redis:        redisCache,
-		DB:           db,
-		EthNetDetails: common.EthNetworkDetails{
-			Name:                          "test",
-			GenesisForkVersionHex:         genesisForkVersionHex,
-			GenesisValidatorsRootHex:      "",
-			BellatrixForkVersionHex:       "0x00000000",
-			DomainBuilder:                 builderSigningDomain,
-			DomainBeaconProposerBellatrix: types.Domain{},
-			DomainBeaconProposerCapella:   types.Domain{},
-		},
+		Log:             common.TestLog,
+		ListenAddr:      "localhost:12345",
+		BeaconClient:    &beaconclient.MultiBeaconClient{},
+		Datastore:       ds,
+		Redis:           redisCache,
+		DB:              db,
+		EthNetDetails:   *mainnetDetails,
 		SecretKey:       sk,
 		ProposerAPI:     true,
 		BlockBuilderAPI: true,
@@ -91,6 +85,25 @@ func (be *testBackend) request(method, path string, payload any) *httptest.Respo
 		require.NoError(be.t, err2)
 		req, err = http.NewRequest(method, path, bytes.NewReader(payloadBytes))
 	}
+
+	require.NoError(be.t, err)
+	rr := httptest.NewRecorder()
+	be.relay.getRouter().ServeHTTP(rr, req)
+	return rr
+}
+
+func (be *testBackend) requestWithUA(method, path, userAgent string, payload any) *httptest.ResponseRecorder {
+	var req *http.Request
+	var err error
+
+	if payload == nil {
+		req, err = http.NewRequest(method, path, bytes.NewReader(nil))
+	} else {
+		payloadBytes, err2 := json.Marshal(payload)
+		require.NoError(be.t, err2)
+		req, err = http.NewRequest(method, path, bytes.NewReader(payloadBytes))
+	}
+	req.Header.Set("User-Agent", userAgent)
 
 	require.NoError(be.t, err)
 	rr := httptest.NewRecorder()
@@ -158,8 +171,6 @@ func TestRegisterValidator(t *testing.T) {
 	path := "/eth/v1/builder/validators"
 
 	t.Run("Normal function", func(t *testing.T) {
-		t.Skip() // has an error at verifying the sig
-
 		backend := newTestBackend(t, 1)
 		pubkeyHex := common.ValidPayloadRegisterValidator.Message.Pubkey.PubkeyHex()
 		index := uint64(17)
@@ -219,6 +230,49 @@ func TestRegisterValidator(t *testing.T) {
 		require.Equal(t, http.StatusBadRequest, rr.Code)
 		require.Contains(t, rr.Body.String(), "timestamp too far in the future")
 	})
+}
+
+func TestGetHeader(t *testing.T) {
+	// Setup backend with headSlot and genesisTime
+	backend := newTestBackend(t, 1)
+	backend.relay.genesisInfo = &beaconclient.GetGenesisResponse{
+		Data: beaconclient.GetGenesisResponseData{
+			GenesisTime: uint64(time.Now().UTC().Unix()),
+		},
+	}
+
+	// request params
+	slot := uint64(2)
+	backend.relay.headSlot.Store(slot)
+	parentHash := "0x13e606c7b3d1faad7e83503ce3dedce4c6bb89b0c28ffb240d713c7b110b9747"
+	proposerPubkey := "0x6ae5932d1e248d987d51b58665b81848814202d7b23b343d20f2a167d12f07dcb01ca41c42fdd60b7fca9c4b90890792"
+	builderPubkey := "0xfa1ed37c3553d0ce1e9349b2c5063cf6e394d231c8d3e0df75e9462257c081543086109ffddaacc0aa76f33dc9661c83"
+	bidValue := big.NewInt(99)
+
+	// request path
+	path := fmt.Sprintf("/eth/v1/builder/header/%d/%s/%s", slot, parentHash, proposerPubkey)
+
+	// Create a bid
+	opts := common.CreateTestBlockSubmissionOpts{
+		Slot:           slot,
+		ParentHash:     parentHash,
+		ProposerPubkey: proposerPubkey,
+	}
+	payload, getPayloadResp, getHeaderResp := common.CreateTestBlockSubmission(t, builderPubkey, bidValue, &opts)
+	_, err := backend.redis.SaveBidAndUpdateTopBid(payload, getPayloadResp, getHeaderResp, time.Now(), false)
+	require.NoError(t, err)
+
+	// Check 1: regular request works and returns a bid
+	rr := backend.request(http.MethodGet, path, nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+	resp := common.GetHeaderResponse{}
+	err = json.Unmarshal(rr.Body.Bytes(), &resp)
+	require.NoError(t, err)
+	require.Equal(t, bidValue.String(), resp.Value().String())
+
+	// Check 2: Request returns 204 if sending a filtered user agent
+	rr = backend.requestWithUA(http.MethodGet, path, "mev-boost/v1.5.0 Go-http-client/1.1", nil)
+	require.Equal(t, http.StatusNoContent, rr.Code)
 }
 
 func TestBuilderApiGetValidators(t *testing.T) {
