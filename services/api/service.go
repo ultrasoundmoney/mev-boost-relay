@@ -134,7 +134,7 @@ type blockSimOptions struct {
 	isHighPrio bool
 	log        *logrus.Entry
 	builder    *blockBuilderCacheEntry
-	req        *BuilderBlockValidationRequest
+	req        *common.BuilderBlockValidationRequest
 }
 
 type blockBuilderCacheEntry struct {
@@ -963,11 +963,6 @@ func (api *RelayAPI) handleGetHeader(w http.ResponseWriter, req *http.Request) {
 	parentHashHex := vars["parent_hash"]
 	proposerPubkeyHex := vars["pubkey"]
 	ua := req.UserAgent()
-	if api.ffRejectPrysmGetHeader && ua == "mev-boost/v1.5.0 Go-http-client/1.1" {
-		api.log.Info("rejecting getHeader from prysm client")
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
 	headSlot := api.headSlot.Load()
 
 	slot, err := strconv.ParseUint(slotStr, 10, 64)
@@ -1327,7 +1322,7 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 		log.Error("demotion found in getPayload, inserting refund justification")
 
 		// Prepare refund data.
-		signedBeaconBlock := SignedBlindedBeaconBlockToBeaconBlock(payload, getPayloadResp)
+		signedBeaconBlock := common.SignedBlindedBeaconBlockToBeaconBlock(payload, getPayloadResp)
 
 		// Get registration entry from the DB.
 		registrationEntry, err := api.db.GetValidatorRegistration(proposerPubkey.String())
@@ -1517,7 +1512,6 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 		return
 	}
 
-
 	// Don't accept blocks with 0 value
 	if payload.Value().Cmp(ZeroU256.BigInt()) == 0 || payload.NumTx() == 0 {
 		api.log.Info("submitNewBlock failed: block with 0 value or no txs")
@@ -1616,7 +1610,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 		isHighPrio: builderEntry.status.IsHighPrio,
 		log:        log,
 		builder:    builderEntry,
-		req: &BuilderBlockValidationRequest{
+		req: &common.BuilderBlockValidationRequest{
 			BuilderSubmitBlockRequest: *payload,
 			RegisteredGasLimit:        slotDuty.GasLimit,
 		},
@@ -1643,12 +1637,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	// Simulate the block submission and save to db
 	timeBeforeValidation := time.Now().UTC()
 	log = log.WithField("timestampBeforeValidation", timeBeforeValidation.UTC().UnixMilli())
-	validationRequestPayload := &common.BuilderBlockValidationRequest{
-		BuilderSubmitBlockRequest: *payload,
-		RegisteredGasLimit:        slotDuty.GasLimit,
-	}
 
-<<<<<<< HEAD
 	// With sufficient collateral, process the block optimistically.
 	if builderEntry.collateral.Cmp(payload.Value()) > 0 &&
 		builderEntry.status.IsOptimistic &&
@@ -1664,12 +1653,12 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 				"durationMs": time.Since(timeBeforeValidation).Milliseconds(),
 				"numWaiting": api.blockSimRateLimiter.currentCounter(),
 			}).Info("block validation failed")
-	
+
 			if os.IsTimeout(simErr) {
 				api.RespondError(w, http.StatusGatewayTimeout, "validation request timeout")
 				return
 			}
-	
+
 			api.RespondError(w, http.StatusBadRequest, simErr.Error())
 			return
 		}
@@ -1678,8 +1667,6 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	nextTime = time.Now().UTC()
 	pf.Simulation = uint64(nextTime.Sub(prevTime).Microseconds())
 	prevTime = nextTime
-
-
 
 	log = log.WithField("timestampAfterValidation", time.Now().UTC().UnixMilli())
 	log.WithFields(logrus.Fields{
@@ -1782,43 +1769,13 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 		}
 	}
 
-<<<<<<< HEAD
-	// save this builder's latest bid
-	err = api.redis.SaveLatestBuilderBid(payload.Slot(), payload.BuilderPubkey().String(), payload.ParentHash(), payload.ProposerPubkey(), receivedAt, getHeaderResponse)
-	if err != nil {
-		log.WithError(err).Error("could not save latest builder bid")
-		api.RespondError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	// recalculate top bid
-	err = api.redis.UpdateTopBid(payload.Slot(), payload.ParentHash(), payload.ProposerPubkey())
-	if err != nil {
-		log.WithError(err).Error("could not compute top bid")
-		api.RespondError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
 	nextTime = time.Now().UTC()
-	eligibleAt = nextTime
 	pf.RedisUpdate = uint64(nextTime.Sub(prevTime).Microseconds())
 	pf.Total = uint64(nextTime.Sub(receivedAt).Microseconds())
 
-	//
-	// all done
-	//
-	log.WithFields(logrus.Fields{
-		"proposerPubkey": payload.ProposerPubkey(),
-		"value":          payload.Value().String(),
-		"tx":             payload.NumTx(),
-		"profile":        pf.String(),
-	}).Info("received block from builder")
-
 	// Respond with OK (TODO: proper response data type https://flashbots.notion.site/Relay-API-Spec-5fb0819366954962bc02e81cb33840f5#fa719683d4ae4a57bc3bf60e138b0dc6)
-=======
 	// All done
 	log.Info("received block from builder")
->>>>>>> f02f7916dd7aa17dc39a560be32a440d0c2c2479
 	w.WriteHeader(http.StatusOK)
 }
 

@@ -26,7 +26,7 @@ var (
 )
 
 type IBlockSimRateLimiter interface {
-	send(context context.Context, payload *BuilderBlockValidationRequest, isHighPrio bool) error
+	send(context context.Context, payload *common.BuilderBlockValidationRequest, isHighPrio bool) error
 	currentCounter() int64
 }
 

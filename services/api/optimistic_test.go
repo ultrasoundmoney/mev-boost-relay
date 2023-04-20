@@ -221,7 +221,7 @@ func TestSimulateBlock(t *testing.T) {
 						IsOptimistic: true,
 					},
 				},
-				req: &BuilderBlockValidationRequest{
+				req: &common.BuilderBlockValidationRequest{
 					BuilderSubmitBlockRequest: common.TestBuilderSubmitBlockRequest(
 						secretkey, getTestBidTrace(*pubkey, collateral)),
 				},
@@ -270,7 +270,7 @@ func TestProcessOptimisticBlock(t *testing.T) {
 						IsOptimistic: true,
 					},
 				},
-				req: &BuilderBlockValidationRequest{
+				req: &common.BuilderBlockValidationRequest{
 					BuilderSubmitBlockRequest: common.TestBuilderSubmitBlockRequest(
 						secretkey, getTestBidTrace(*pubkey, collateral)),
 				},
@@ -386,6 +386,7 @@ func TestBuilderApiSubmitNewBlockOptimistic(t *testing.T) {
 		t.Run(tc.description, func(t *testing.T) {
 			pubkey, secretkey, backend := startTestBackend(t)
 			backend.relay.optimisticSlot = slot
+			backend.relay.capellaEpoch = 1
 			var randaoHash boostTypes.Hash
 			err := randaoHash.FromSlice([]byte(randao))
 			require.NoError(t, err)
