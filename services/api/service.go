@@ -1176,8 +1176,8 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 
 	log = log.WithField("timestampAfterAlreadyDelivered", time.Now().UTC().UnixMilli())
 
-	// Get the response - from Redis, Memcache or DB
-	// note that recent mev-boost versions only send getPayload to relays that provided the bid
+	// Get the response - from memory, Redis or DB
+	// note that mev-boost might send getPayload for bids of other relays, thus this code wouldn't find anything
 	getPayloadResp, err := api.datastore.GetGetPayloadResponse(payload.Slot(), proposerPubkey.String(), payload.BlockHash())
 	if err != nil || getPayloadResp == nil {
 		log.WithError(err).Warn("failed getting execution payload (1/2)")
@@ -1196,6 +1196,7 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 		}
 	}
 
+	log = log.WithField("timestampBeforePublishing", time.Now().UTC().UnixMilli())
 	// Publish the signed beacon block via beacon-node
 	if getPayloadPublishDelayMs > 0 {
 		// Random delay before publishing (0-500ms)
@@ -1221,6 +1222,16 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 		api.RespondError(w, http.StatusBadRequest, "failed to publish block")
 		return
 	}
+	log = log.WithField("timestampAfterPublishing", time.Now().UTC().UnixMilli())
+	log.Info("block published through beacon node")
+
+	// Remember that getPayload has already been called
+	go func() {
+		err := api.redis.SetStats(datastore.RedisStatsFieldSlotLastPayloadDelivered, payload.Slot())
+		if err != nil {
+			log.WithError(err).Error("failed to save delivered payload slot to redis")
+		}
+	}()
 
 	timeAfterPublish := time.Now().UTC().UnixMilli()
 	log = log.WithField("timestampAfterPublishing", timeAfterPublish)
