@@ -1601,21 +1601,6 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 		}
 	}()
 
-	nextTime = time.Now().UTC()
-	pf.Prechecks = uint64(nextTime.Sub(prevTime).Microseconds())
-	prevTime = nextTime
-
-	// Construct simulation request.
-	opts := blockSimOptions{
-		isHighPrio: builderEntry.status.IsHighPrio,
-		log:        log,
-		builder:    builderEntry,
-		req: &common.BuilderBlockValidationRequest{
-			BuilderSubmitBlockRequest: *payload,
-			RegisteredGasLimit:        slotDuty.GasLimit,
-		},
-	}
-
 	// Get the latest top bid value from Redis
 	topBidValue, err := api.redis.GetTopBidValue(payload.Slot(), payload.ParentHash(), payload.ProposerPubkey())
 	if err != nil {
@@ -1632,6 +1617,21 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 			w.WriteHeader(http.StatusOK)
 			return
 		}
+	}
+
+	nextTime = time.Now().UTC()
+	pf.Prechecks = uint64(nextTime.Sub(prevTime).Microseconds())
+	prevTime = nextTime
+
+	// Construct simulation request.
+	opts := blockSimOptions{
+		isHighPrio: builderEntry.status.IsHighPrio,
+		log:        log,
+		builder:    builderEntry,
+		req: &common.BuilderBlockValidationRequest{
+			BuilderSubmitBlockRequest: *payload,
+			RegisteredGasLimit:        slotDuty.GasLimit,
+		},
 	}
 
 	// Simulate the block submission and save to db
