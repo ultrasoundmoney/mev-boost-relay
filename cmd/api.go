@@ -52,7 +52,7 @@ func init() {
 	apiCmd.Flags().StringVar(&apiListenAddr, "listen-addr", apiDefaultListenAddr, "listen address for webserver")
 	apiCmd.Flags().StringSliceVar(&beaconNodeURIs, "beacon-uris", defaultBeaconURIs, "beacon endpoints")
 	apiCmd.Flags().StringVar(&redisURI, "redis-uri", defaultRedisURI, "redis uri")
-	apiCmd.Flags().StringVar(&redisReadonlyURI, "redis-readonly-uri", "", "redis readonly uri")
+	apiCmd.Flags().StringVar(&redisReadonlyURI, "redis-readonly-uri", defaultReadonlyRedisURI, "redis readonly uri")
 	apiCmd.Flags().StringVar(&postgresDSN, "db", defaultPostgresDSN, "PostgreSQL DSN")
 	apiCmd.Flags().StringSliceVar(&memcachedURIs, "memcached-uris", defaultMemcachedURIs,
 		"Enable memcached, typically used as secondary backup to Redis for redundancy")
