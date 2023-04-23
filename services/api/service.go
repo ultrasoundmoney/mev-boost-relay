@@ -1122,6 +1122,11 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 		"timestampAfterDecode": decodeTime.UnixMilli(),
 	})
 
+	if msIntoSlot < 0 {
+		delayMillis := (msIntoSlot * -1) + int64(rand.Intn(50)) //nolint:gosec
+		time.Sleep(time.Duration(delayMillis) * time.Millisecond)
+	}
+
 	// Get the proposer pubkey based on the validator index from the payload
 	proposerPubkey, found := api.datastore.GetKnownValidatorPubkeyByIndex(payload.ProposerIndex())
 	if !found {
