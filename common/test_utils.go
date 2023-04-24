@@ -1,9 +1,13 @@
 package common
 
 import (
+	"encoding/hex"
+
 	"github.com/attestantio/go-builder-client/api/capella"
+	v2 "github.com/attestantio/go-builder-client/api/v2"
 	"github.com/attestantio/go-eth2-client/spec/bellatrix"
 	consensuscapella "github.com/attestantio/go-eth2-client/spec/capella"
+	"github.com/attestantio/go-eth2-client/spec/phase0"
 	"github.com/flashbots/go-boost-utils/bls"
 	boostTypes "github.com/flashbots/go-boost-utils/types"
 	"github.com/sirupsen/logrus"
@@ -70,5 +74,23 @@ func TestBuilderSubmitBlockRequest(sk *bls.SecretKey, bid *BidTraceV2) BuilderSu
 				Withdrawals:  []*consensuscapella.Withdrawal{},
 			},
 		},
+	}
+}
+
+func TestBuilderSubmitBlockRequestV2(sk *bls.SecretKey, bid *BidTraceV2) *v2.SubmitBlockRequest {
+	signature, err := boostTypes.SignMessage(bid, boostTypes.DomainBuilder, sk)
+	check(err, " SignMessage: ", bid, sk)
+
+	wRoot, err := hex.DecodeString("792930bbd5baac43bcc798ee49aa8185ef76bb3b44ba62b91d86ae569e4bb535")
+	check(err)
+	return &v2.SubmitBlockRequest{
+		Message: &bid.BidTrace,
+		ExecutionPayloadHeader: &consensuscapella.ExecutionPayloadHeader{
+			TransactionsRoot: [32]byte{},
+			Timestamp:        bid.Slot * 12, // 12 seconds per slot.
+			PrevRandao:       _HexToHash("01234567890123456789012345678901"),
+			WithdrawalsRoot:  phase0.Root(wRoot),
+		},
+		Signature: [96]byte(signature),
 	}
 }

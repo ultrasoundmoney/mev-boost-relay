@@ -184,6 +184,19 @@ func runOptimisticBlockSubmission(t *testing.T, opts blockRequestOpts, simErr er
 	return rr
 }
 
+func runOptimisticBlockSubmissionV2(t *testing.T, opts blockRequestOpts, simErr error, backend *testBackend) *httptest.ResponseRecorder {
+	backend.relay.blockSimRateLimiter = &MockBlockSimulationRateLimiter{
+		simulationError: simErr,
+	}
+
+	req := common.TestBuilderSubmitBlockRequestV2(opts.secretkey, getTestBidTrace(opts.pubkey, opts.blockValue))
+	rr := backend.request(http.MethodPost, pathSubmitNewBlockV2, &req)
+
+	// Let updates happen async.
+	time.Sleep(100 * time.Millisecond)
+	return rr
+}
+
 func TestSimulateBlock(t *testing.T) {
 	cases := []struct {
 		description     string
@@ -466,4 +479,56 @@ func TestInternalBuilderCollateral(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, resp.BuilderID, "builder0x69")
 	require.Equal(t, resp.Collateral, "10000")
+}
+
+func TestBuilderApiSubmitNewBlockOptimisticV2(t *testing.T) {
+	testCases := []struct {
+		description     string
+		wantStatus      common.BuilderStatus
+		simulationError error
+		expectDemotion  bool
+		httpCode        uint64
+		blockValue      uint64
+	}{
+		{
+			description: "success",
+			wantStatus: common.BuilderStatus{
+				IsOptimistic: true,
+				IsHighPrio:   true,
+			},
+			simulationError: nil,
+			expectDemotion:  false,
+			httpCode:        200, // success
+			blockValue:      collateral - 1,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.description, func(t *testing.T) {
+			pubkey, secretkey, backend := startTestBackend(t)
+			backend.relay.optimisticSlot = slot
+			backend.relay.capellaEpoch = 1
+			var randaoHash boostTypes.Hash
+			err := randaoHash.FromSlice([]byte(randao))
+			require.NoError(t, err)
+			withRoot, err := ComputeWithdrawalsRoot([]*consensuscapella.Withdrawal{})
+			require.NoError(t, err)
+			backend.relay.payloadAttributes[emptyHash] = payloadAttributesHelper{
+				slot:            slot,
+				withdrawalsRoot: withRoot,
+				payloadAttributes: beaconclient.PayloadAttributes{
+					PrevRandao: randaoHash.String(),
+				},
+			}
+			rr := runOptimisticBlockSubmissionV2(t, blockRequestOpts{
+				secretkey:  secretkey,
+				pubkey:     *pubkey,
+				blockValue: tc.blockValue,
+				domain:     backend.relay.opts.EthNetDetails.DomainBuilder,
+			}, tc.simulationError, backend)
+
+			// Check http code.
+			require.Equal(t, uint64(rr.Code), tc.httpCode)
+		})
+	}
 }

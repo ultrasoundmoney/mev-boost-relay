@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,7 +23,9 @@ import (
 	"time"
 
 	"github.com/NYTimes/gziphandler"
+	v1 "github.com/attestantio/go-builder-client/api/v1"
 	"github.com/attestantio/go-eth2-client/api/v1/capella"
+	capellaspec "github.com/attestantio/go-eth2-client/spec/capella"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 	"github.com/buger/jsonparser"
 	"github.com/flashbots/go-boost-utils/bls"
@@ -67,6 +70,7 @@ var (
 	// Block builder API
 	pathBuilderGetValidators = "/relay/v1/builder/validators"
 	pathSubmitNewBlock       = "/relay/v1/builder/blocks"
+	pathSubmitNewBlockV2     = "/relay/v2/builder/blocks"
 
 	// Data API
 	pathDataProposerPayloadDelivered = "/relay/v1/data/bidtraces/proposer_payload_delivered"
@@ -311,6 +315,7 @@ func (api *RelayAPI) getRouter() http.Handler {
 		api.log.Info("block builder API enabled")
 		r.HandleFunc(pathBuilderGetValidators, api.handleBuilderGetValidators).Methods(http.MethodGet)
 		r.HandleFunc(pathSubmitNewBlock, api.handleSubmitNewBlock).Methods(http.MethodPost)
+		r.HandleFunc(pathSubmitNewBlockV2, api.handleSubmitNewBlockV2).Methods(http.MethodPost)
 	}
 
 	// Data API
@@ -1776,6 +1781,260 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	// Respond with OK (TODO: proper response data type https://flashbots.notion.site/Relay-API-Spec-5fb0819366954962bc02e81cb33840f5#fa719683d4ae4a57bc3bf60e138b0dc6)
 	// All done
 	log.Info("received block from builder")
+	w.WriteHeader(http.StatusOK)
+}
+
+func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Request) {
+	var pf common.Profile
+	var prevTime, nextTime time.Time
+
+	headSlot := api.headSlot.Load()
+	receivedAt := time.Now().UTC()
+	prevTime = receivedAt
+
+	args := req.URL.Query()
+	isCancellationEnabled := args.Get("cancellations") == "1"
+
+	log := api.log.WithFields(logrus.Fields{
+		"method":                "submitNewBlockV2",
+		"contentLength":         req.ContentLength,
+		"headSlot":              headSlot,
+		"cancellationEnabled":   isCancellationEnabled,
+		"timestampRequestStart": receivedAt.UnixMilli(),
+	})
+
+	// Log at start and end of request
+	log.Info("request initiated")
+	defer log.WithFields(logrus.Fields{
+		"timestampRequestFin": time.Now().UTC().UnixMilli(),
+		"requestDurationMs":   time.Since(receivedAt).Milliseconds(),
+	}).Info("request finished")
+
+	// If cancellations are disabled but builder requested it, return error
+	if isCancellationEnabled && !api.ffEnableCancellations {
+		log.Info("builder submitted with cancellations enabled, but feature flag is disabled")
+		api.RespondError(w, http.StatusBadRequest, "cancellations are disabled")
+		return
+	}
+
+	var err error
+	var r io.Reader = req.Body
+	if req.Header.Get("Content-Encoding") == "gzip" {
+		r, err = gzip.NewReader(req.Body)
+		if err != nil {
+			log.WithError(err).Warn("could not create gzip reader")
+			api.RespondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		log = log.WithField("gzip-req", true)
+	}
+
+	var buf bytes.Buffer
+	rHeader := io.TeeReader(r, &buf)
+
+	// Parsing starts by finding Message, Header and Signature.
+	var bid v1.BidTrace
+	var header capellaspec.ExecutionPayloadHeader
+	var sig boostTypes.Signature
+	var bidFound, headerFound, sigFound bool
+	dec := json.NewDecoder(rHeader)
+	for !bidFound || !headerFound || !sigFound {
+		t, err := dec.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			log.WithError(err).Warn("could not read payload")
+			api.RespondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if t == "message" {
+			err = dec.Decode(&bid)
+			if err != nil {
+				log.WithError(err).Warn("could not decode bid trace")
+				api.RespondError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			bidFound = true
+		}
+		if t == "execution_payload_header" {
+			err = dec.Decode(&header)
+			if err != nil {
+				log.WithError(err).Warn("could not decode execution payload header")
+				api.RespondError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			headerFound = true
+		}
+		if t == "signature" {
+			sigT, _ := dec.Token()
+			sigB, err := hex.DecodeString(sigT.(string)[2:])
+			if err != nil {
+				log.WithError(err).Warn("could not decode signature")
+				api.RespondError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			err = sig.FromSlice(sigB)
+			if err != nil {
+				log.WithError(err).Warn("could not read signature from slice")
+				api.RespondError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			sigFound = true
+		}
+		if t == "transactions" {
+			log.Warn("transaction list preempts bid, header, or payload")
+		}
+		if t == "withdrawals" {
+			log.Warn("transaction list preempts bid, header, or payload")
+		}
+	}
+
+	nextTime = time.Now().UTC()
+	pf.Decode = uint64(nextTime.Sub(prevTime).Microseconds())
+	prevTime = nextTime
+
+	log = log.WithFields(logrus.Fields{
+		"timestampAfterDecoding": time.Now().UTC().UnixMilli(),
+		"slot":                   bid.Slot,
+		"builderPubkey":          bid.BuilderPubkey.String(),
+		"blockHash":              bid.BlockHash.String(),
+		"proposerPubkey":         bid.ProposerPubkey.String(),
+		"parentHash":             bid.ParentHash.String(),
+		"value":                  bid.Value.String(),
+	})
+
+	ok, err := boostTypes.VerifySignature(&bid, api.opts.EthNetDetails.DomainBuilder, bid.BuilderPubkey[:], sig[:])
+	if !ok || err != nil {
+		log.WithError(err).Warn("could not verify builder signature")
+		api.RespondError(w, http.StatusBadRequest, "invalid signature")
+		return
+	}
+
+	// Check optimistic eligibility.
+	builderPubkey := bid.BuilderPubkey
+	builderEntry, ok := api.blockBuildersCache[builderPubkey.String()]
+	if !ok {
+		log.Errorf("unable to read builder: %x from the builder cache, rejecting submission.", builderPubkey.String())
+		api.RespondError(w, http.StatusBadRequest, "unknown builder pubkey")
+		return
+	}
+	if !builderEntry.status.IsOptimistic {
+		log.Errorf("builder: %x not eligible for optimistic relaying.", builderPubkey.String())
+		api.RespondError(w, http.StatusBadRequest, "builder not eligible for optimistic relaying")
+		return
+	}
+	if builderEntry.collateral.Cmp(bid.Value.ToBig()) <= 0 || bid.Slot != api.optimisticSlot {
+		log.Warningf("insufficient collateral or non-optimistic slot. reverting to standard relaying.")
+		api.RespondError(w, http.StatusBadRequest, "unable to execute v2 optimistic relaying")
+		// api.handleSubmitNewBlock(w, req) // TODO(mikeneuder): req is already partially consumed here.
+		return
+	}
+	log = log.WithFields(logrus.Fields{
+		"builderEntry": builderEntry,
+	})
+	log.WithFields(logrus.Fields{
+		"bid":       bid,
+		"signature": sig,
+	}).Info("optimistically parsed bid and verified signature")
+
+	// Optimistic prechecks.
+	if bid.Slot <= headSlot {
+		api.log.Info("submitNewBlock failed: submission for past slot")
+		api.RespondError(w, http.StatusBadRequest, "submission for past slot")
+		return
+	}
+
+	if bid.Slot > headSlot+1 {
+		api.log.Info("submitNewBlock failed: submission for future slot")
+		api.RespondError(w, http.StatusBadRequest, "submission for future slot")
+		return
+	}
+
+	// Timestamp check
+	expectedTimestamp := api.genesisInfo.Data.GenesisTime + (bid.Slot * common.SecondsPerSlot)
+	if header.Timestamp != expectedTimestamp {
+		log.Warnf("incorrect timestamp. got %d, expected %d", header.Timestamp, expectedTimestamp)
+		api.RespondError(w, http.StatusBadRequest, fmt.Sprintf("incorrect timestamp. got %d, expected %d", header.Timestamp, expectedTimestamp))
+		return
+	}
+
+	if builderEntry.status.IsBlacklisted {
+		log.Info("builder is blacklisted")
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// In case only high-prio requests are accepted, fail others
+	if api.ffDisableLowPrioBuilders && !builderEntry.status.IsHighPrio {
+		log.Info("rejecting low-prio builder (ff-disable-low-prio-builders)")
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	log = log.WithField("timestampAfterChecks1", time.Now().UTC().UnixMilli())
+
+	// ensure correct feeRecipient is used
+	api.proposerDutiesLock.RLock()
+	slotDuty := api.proposerDutiesMap[bid.Slot]
+	api.proposerDutiesLock.RUnlock()
+	if slotDuty == nil {
+		log.Warn("could not find slot duty")
+		api.RespondError(w, http.StatusBadRequest, "could not find slot duty")
+		return
+	} else if slotDuty.FeeRecipient.String() != bid.ProposerFeeRecipient.String() {
+		log.Info("fee recipient does not match")
+		api.RespondError(w, http.StatusBadRequest, "fee recipient does not match")
+		return
+	}
+
+	// Sanity check the submission
+	// err = SanityCheckBuilderBlockSubmission(payload)
+	// if err != nil {
+	// 	log.WithError(err).Info("block submission sanity checks failed")
+	// 	api.RespondError(w, http.StatusBadRequest, err.Error())
+	// 	return
+	// }
+
+	log = log.WithField("timestampBeforeAttributesCheck", time.Now().UTC().UnixMilli())
+
+	api.payloadAttributesLock.RLock()
+	attrs, ok := api.payloadAttributes[bid.ParentHash.String()]
+	api.payloadAttributesLock.RUnlock()
+	if !ok || bid.Slot != attrs.slot {
+		log.Warn("payload attributes not (yet) known")
+		api.RespondError(w, http.StatusBadRequest, "payload attributes not (yet) known")
+		return
+	}
+
+	randao := fmt.Sprintf("0x%x", header.PrevRandao)
+	if randao != attrs.payloadAttributes.PrevRandao {
+		msg := fmt.Sprintf("incorrect prev_randao - got: %s, expected: %s", randao, attrs.payloadAttributes.PrevRandao)
+		log.Info(msg)
+		api.RespondError(w, http.StatusBadRequest, msg)
+		return
+	}
+
+	if header.WithdrawalsRoot != attrs.withdrawalsRoot {
+		msg := fmt.Sprintf("incorrect withdrawals root - got: %s, expected: %s", header.WithdrawalsRoot.String(), attrs.withdrawalsRoot.String())
+		log.Info(msg)
+		api.RespondError(w, http.StatusBadRequest, msg)
+		return
+	}
+
+	nextTime = time.Now().UTC()
+	pf.Prechecks = uint64(nextTime.Sub(prevTime).Microseconds())
+	prevTime = nextTime
+
+	// Join the header bytes with the remaining bytes.
+	// go api.optimisticV2Slow(io.MultiReader(&buf, r), gasLimit, receivedAt, pf, builderEntry)
+
+	log.WithFields(logrus.Fields{
+		"value":   bid.Value.String(),
+		"profile": pf.String(),
+	}).Info("v2 optimistically processed block from builder")
 	w.WriteHeader(http.StatusOK)
 }
 
