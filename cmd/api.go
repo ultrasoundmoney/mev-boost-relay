@@ -25,14 +25,20 @@ var (
 	apiDefaultLogTag     = os.Getenv("LOG_TAG")
 
 	apiDefaultPprofEnabled       = os.Getenv("PPROF") == "1"
+	apiDefaultBuilderAPIEnabled  = os.Getenv("ENABLE_BUILDER_API") == "1"
+	apiDefaultDataAPIEnabled     = os.Getenv("ENABLE_DATA_API") == "1"
 	apiDefaultInternalAPIEnabled = os.Getenv("ENABLE_INTERNAL_API") == "1"
+	apiDefaultProposerAPIEnabled = os.Getenv("ENABLE_PROPOSER_API") == "1"
 
 	apiListenAddr   string
 	apiPprofEnabled bool
 	apiSecretKey    string
 	apiBlockSimURL  string
 	apiDebug        bool
+	apiBuilderAPI   bool
+	apiDataAPI      bool
 	apiInternalAPI  bool
+	apiProposerAPI  bool
 	apiLogTag       string
 )
 
@@ -46,6 +52,7 @@ func init() {
 	apiCmd.Flags().StringVar(&apiListenAddr, "listen-addr", apiDefaultListenAddr, "listen address for webserver")
 	apiCmd.Flags().StringSliceVar(&beaconNodeURIs, "beacon-uris", defaultBeaconURIs, "beacon endpoints")
 	apiCmd.Flags().StringVar(&redisURI, "redis-uri", defaultRedisURI, "redis uri")
+	apiCmd.Flags().StringVar(&redisReadonlyURI, "redis-readonly-uri", defaultReadonlyRedisURI, "redis readonly uri")
 	apiCmd.Flags().StringVar(&postgresDSN, "db", defaultPostgresDSN, "PostgreSQL DSN")
 	apiCmd.Flags().StringSliceVar(&memcachedURIs, "memcached-uris", defaultMemcachedURIs,
 		"Enable memcached, typically used as secondary backup to Redis for redundancy")
@@ -54,7 +61,10 @@ func init() {
 	apiCmd.Flags().StringVar(&network, "network", defaultNetwork, "Which network to use")
 
 	apiCmd.Flags().BoolVar(&apiPprofEnabled, "pprof", apiDefaultPprofEnabled, "enable pprof API")
+	apiCmd.Flags().BoolVar(&apiBuilderAPI, "builder-api", apiDefaultBuilderAPIEnabled, "enable builder API (/builder/...)")
+	apiCmd.Flags().BoolVar(&apiDataAPI, "data-api", apiDefaultDataAPIEnabled, "enable data API (/data/...)")
 	apiCmd.Flags().BoolVar(&apiInternalAPI, "internal-api", apiDefaultInternalAPIEnabled, "enable internal API (/internal/...)")
+	apiCmd.Flags().BoolVar(&apiProposerAPI, "proposer-api", apiDefaultProposerAPIEnabled, "enable proposer API (/proposer/...)")
 }
 
 var apiCmd = &cobra.Command{
@@ -96,7 +106,7 @@ var apiCmd = &cobra.Command{
 
 		// Connect to Redis
 		log.Infof("Connecting to Redis at %s ...", redisURI)
-		redis, err := datastore.NewRedisCache(redisURI, networkInfo.Name)
+		redis, err := datastore.NewRedisCache(redisURI, networkInfo.Name, redisReadonlyURI)
 		if err != nil {
 			log.WithError(err).Fatalf("Failed to connect to Redis at %s", redisURI)
 		}
@@ -139,10 +149,10 @@ var apiCmd = &cobra.Command{
 			EthNetDetails: *networkInfo,
 			BlockSimURL:   apiBlockSimURL,
 
-			ProposerAPI:     true,
-			BlockBuilderAPI: true,
-			DataAPI:         true,
+			BlockBuilderAPI: apiBuilderAPI,
+			DataAPI:         apiDataAPI,
 			InternalAPI:     apiInternalAPI,
+			ProposerAPI:     apiProposerAPI,
 			PprofAPI:        apiPprofEnabled,
 		}
 
