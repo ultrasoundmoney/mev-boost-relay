@@ -10,7 +10,7 @@ var (
 	defaultNetwork          = common.GetEnv("NETWORK", "")
 	defaultBeaconURIs       = common.GetSliceEnv("BEACON_URIS", []string{"http://localhost:3500"})
 	defaultRedisURI         = common.GetEnv("REDIS_URI", "localhost:6379")
-	defaultReadonlyRedisURI = common.GetEnv("REDIS_READONLY_URI", "")
+	defaultRedisReadonlyURI = common.GetEnv("REDIS_READONLY_URI", "")
 	defaultPostgresDSN      = common.GetEnv("POSTGRES_DSN", "")
 	defaultMemcachedURIs    = common.GetSliceEnv("MEMCACHED_URIS", nil)
 	defaultLogJSON          = os.Getenv("LOG_JSON") != ""

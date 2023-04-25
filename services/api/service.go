@@ -348,7 +348,7 @@ func (api *RelayAPI) isCapella(slot uint64) bool {
 	if api.capellaEpoch == 0 { // CL didn't yet have it
 		return false
 	}
-	epoch := slot / uint64(common.SlotsPerEpoch)
+	epoch := slot / common.SlotsPerEpoch
 	return epoch >= api.capellaEpoch
 }
 
@@ -373,7 +373,7 @@ func (api *RelayAPI) StartServer() (err error) {
 
 	// Helpers
 	currentSlot := bestSyncStatus.HeadSlot
-	currentEpoch := currentSlot / uint64(common.SlotsPerEpoch)
+	currentEpoch := currentSlot / common.SlotsPerEpoch
 
 	api.genesisInfo, err = api.beaconClient.GetGenesis()
 	if err != nil {
@@ -523,12 +523,12 @@ func (api *RelayAPI) startValidatorRegistrationDBProcessor() {
 }
 
 // simulateBlock sends a request for a block simulation to blockSimRateLimiter.
-func (api *RelayAPI) simulateBlock(ctx context.Context, opts blockSimOptions) error {
+func (api *RelayAPI) simulateBlock(ctx context.Context, opts blockSimOptions) (error, error) {
 	t := time.Now()
-	simErr := api.blockSimRateLimiter.send(ctx, opts.req, opts.isHighPrio)
+	reqErr, simErr := api.blockSimRateLimiter.Send(ctx, opts.req, opts.isHighPrio)
 	log := opts.log.WithFields(logrus.Fields{
 		"duration":   time.Since(t).Seconds(),
-		"numWaiting": api.blockSimRateLimiter.currentCounter(),
+		"numWaiting": api.blockSimRateLimiter.CurrentCounter(),
 	})
 	if simErr != nil &&
 		simErr.Error() != ErrBlockAlreadyKnown &&
@@ -537,10 +537,14 @@ func (api *RelayAPI) simulateBlock(ctx context.Context, opts blockSimOptions) er
 		// Mark builder as non-optimistic.
 		opts.builder.status.IsOptimistic = false
 		log.WithError(simErr).Error("block validation failed")
-		return simErr
+		return nil, simErr
+	}
+	if reqErr != nil {
+		log.WithError(reqErr).Error("block validation failed: request error")
+		return reqErr, nil
 	}
 	log.Info("block validation successful")
-	return nil
+	return nil, nil
 }
 
 func (api *RelayAPI) demoteBuilder(pubkey string, req *common.BuilderSubmitBlockRequest, simError error) {
@@ -586,8 +590,9 @@ func (api *RelayAPI) processOptimisticBlock(opts blockSimOptions) {
 		// it for logging, it is not atomic to avoid the performance impact.
 		"optBlocksInFlight": api.optimisticBlocksInFlight,
 	}).Infof("simulating optimistic block with hash: %v", opts.req.BuilderSubmitBlockRequest.BlockHash())
+	reqErr, simErr := api.simulateBlock(ctx, opts)
 
-	if simErr := api.simulateBlock(ctx, opts); simErr != nil {
+	if reqErr != nil || simErr != nil {
 		api.log.WithError(simErr).Error("block simulation failed in processOptimisticBlock, demoting builder")
 
 		// Demote the builder.
@@ -679,11 +684,11 @@ func (api *RelayAPI) processNewSlot(headSlot uint64) {
 	}
 
 	// log
-	epoch := headSlot / uint64(common.SlotsPerEpoch)
+	epoch := headSlot / common.SlotsPerEpoch
 	api.log.WithFields(logrus.Fields{
 		"epoch":              epoch,
 		"slotHead":           headSlot,
-		"slotStartNextEpoch": (epoch + 1) * uint64(common.SlotsPerEpoch),
+		"slotStartNextEpoch": (epoch + 1) * common.SlotsPerEpoch,
 	}).Infof("updated headSlot to %d", headSlot)
 
 	if api.isBellatrix(prevHeadSlot) && api.isCapella(headSlot) {
@@ -1071,16 +1076,19 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 		"mevBoostV":             common.GetMevBoostVersionFromUserAgent(ua),
 		"contentLength":         req.ContentLength,
 		"headSlot":              headSlot,
+		"headSlotEpochPos":      (headSlot % common.SlotsPerEpoch) + 1,
 		"idArg":                 req.URL.Query().Get("id"),
 		"timestampRequestStart": receivedAt.UnixMilli(),
 	})
 
 	// Log at start and end of request
 	log.Info("request initiated")
-	defer log.WithFields(logrus.Fields{
-		"timestampRequestFin": time.Now().UTC().UnixMilli(),
-		"requestDurationMs":   time.Since(receivedAt).Milliseconds(),
-	}).Info("request finished")
+	defer func() {
+		log.WithFields(logrus.Fields{
+			"timestampRequestFin": time.Now().UTC().UnixMilli(),
+			"requestDurationMs":   time.Since(receivedAt).Milliseconds(),
+		}).Info("request finished")
+	}()
 
 	// Read the body first, so we can decode it later
 	body, err := io.ReadAll(req.Body)
@@ -1120,16 +1128,12 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 	msIntoSlot := decodeTime.UnixMilli() - int64((slotStartTimestamp * 1000))
 	log = log.WithFields(logrus.Fields{
 		"slot":                 payload.Slot(),
+		"slotEpochPos":         (payload.Slot() % common.SlotsPerEpoch) + 1,
 		"blockHash":            payload.BlockHash(),
 		"slotStartSec":         slotStartTimestamp,
 		"msIntoSlot":           msIntoSlot,
 		"timestampAfterDecode": decodeTime.UnixMilli(),
 	})
-
-	if msIntoSlot < 0 {
-		delayMillis := (msIntoSlot * -1) + int64(rand.Intn(50)) //nolint:gosec
-		time.Sleep(time.Duration(delayMillis) * time.Millisecond)
-	}
 
 	// Get the proposer pubkey based on the validator index from the payload
 	proposerPubkey, found := api.datastore.GetKnownValidatorPubkeyByIndex(payload.ProposerIndex())
@@ -1180,31 +1184,7 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 	log = log.WithField("timestampAfterSignatureVerify", time.Now().UTC().UnixMilli())
 	log.Info("getPayload request received")
 
-	// Check whether getPayload has already been called
-	slotLastPayloadDelivered, err := api.redis.GetStatsUint64(datastore.RedisStatsFieldSlotLastPayloadDelivered)
-	if err != nil && !errors.Is(err, redis.Nil) {
-		log.WithError(err).Error("failed to get delivered payload slot from redis")
-	} else if payload.Slot() <= slotLastPayloadDelivered {
-		log.Warn("getPayload was already called for this slot")
-		api.RespondError(w, http.StatusBadRequest, "payload for this slot was already delivered")
-		return
-	}
-
-	log = log.WithField("timestampAfterAlreadyDelivered", time.Now().UTC().UnixMilli())
-
-	// Only allow getPayload requests for the current slot until a certain cutoff time
-	if getPayloadRequestCutoffMs > 0 && msIntoSlot > 0 && msIntoSlot > int64(getPayloadRequestCutoffMs) {
-		log.Warn("getPayload sent too late")
-		api.RespondError(w, http.StatusBadRequest, fmt.Sprintf("sent too late - %d ms into slot", msIntoSlot))
-
-		go func() {
-			err := api.db.InsertTooLateGetPayload(payload.Slot(), proposerPubkey.String(), payload.BlockHash(), slotStartTimestamp, uint64(receivedAt.UnixMilli()), uint64(decodeTime.UnixMilli()), uint64(msIntoSlot))
-			if err != nil {
-				log.WithError(err).Error("failed to insert payload too late into db")
-			}
-		}()
-		return
-	}
+	// TODO: store signed blinded block in database (always)
 
 	// Get the response - from Redis, Memcache or DB
 	// note that recent mev-boost versions only send getPayload to relays that provided the bid
@@ -1226,8 +1206,52 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 		}
 	}
 
-	log = log.WithField("timestampBeforePublishing", time.Now().UTC().UnixMilli())
-	// Publish the signed beacon block via beacon-node
+	// Now we know this relay also has the payload
+	log = log.WithField("timestampAfterLoadResponse", time.Now().UTC().UnixMilli())
+
+	// Check whether getPayload has already been called -- TODO: do we need to allow multiple submissions of one blinded block?
+	err = api.redis.CheckAndSetLastSlotDelivered(payload.Slot())
+	log = log.WithField("timestampAfterAlreadyDeliveredCheck", time.Now().UTC().UnixMilli())
+	if err != nil {
+		if errors.Is(err, datastore.ErrSlotAlreadyDelivered) {
+			// BAD VALIDATOR, 2x GETPAYLOAD
+			log.Warn("validator called getPayload twice")
+			api.RespondError(w, http.StatusBadRequest, "payload for this slot was already delivered")
+			return
+		} else if errors.Is(err, redis.TxFailedErr) {
+			// BAD VALIDATOR, 2x GETPAYLOAD + RACE
+			log.Warn("validator called getPayload twice (race)")
+			api.RespondError(w, http.StatusBadRequest, "payload for this slot was already delivered (race)")
+			return
+		}
+		log.WithError(err).Error("redis.CheckAndSetLastSlotDelivered failed")
+	}
+
+	// Handle early/late requests
+	if msIntoSlot < 0 {
+		// Wait until slot start (t=0) if still in the future
+		_msSinceSlotStart := time.Now().UTC().UnixMilli() - int64((slotStartTimestamp * 1000))
+		if _msSinceSlotStart < 0 {
+			delayMillis := (_msSinceSlotStart * -1) + int64(rand.Intn(50)) //nolint:gosec
+			log = log.WithField("delayMillis", delayMillis)
+			log.Info("waiting until slot start t=0")
+			time.Sleep(time.Duration(delayMillis) * time.Millisecond)
+		}
+	} else if getPayloadRequestCutoffMs > 0 && msIntoSlot > int64(getPayloadRequestCutoffMs) {
+		// Reject requests after cutoff time
+		log.Warn("getPayload sent too late")
+		api.RespondError(w, http.StatusBadRequest, fmt.Sprintf("sent too late - %d ms into slot", msIntoSlot))
+
+		go func() {
+			err := api.db.InsertTooLateGetPayload(payload.Slot(), proposerPubkey.String(), payload.BlockHash(), slotStartTimestamp, uint64(receivedAt.UnixMilli()), uint64(decodeTime.UnixMilli()), uint64(msIntoSlot))
+			if err != nil {
+				log.WithError(err).Error("failed to insert payload too late into db")
+			}
+		}()
+		return
+	}
+
+	// Introduce a random delay (disabled by default)
 	if getPayloadPublishDelayMs > 0 {
 		delayMillis := rand.Intn(getPayloadPublishDelayMs) //nolint:gosec
 		time.Sleep(time.Duration(delayMillis) * time.Millisecond)
@@ -1251,29 +1275,10 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 		api.RespondError(w, http.StatusBadRequest, "failed to publish block")
 		return
 	}
-	log = log.WithField("timestampAfterPublishing", time.Now().UTC().UnixMilli())
-	log.Info("block published through beacon node")
-
-	// Remember that getPayload has already been called
-	go func() {
-		err := api.redis.SetStats(datastore.RedisStatsFieldSlotLastPayloadDelivered, payload.Slot())
-		if err != nil {
-			log.WithError(err).Error("failed to save delivered payload slot to redis")
-		}
-	}()
-
 	timeAfterPublish := time.Now().UTC().UnixMilli()
 	msNeededForPublishing := uint64(timeAfterPublish - timeBeforePublish)
 	log = log.WithField("timestampAfterPublishing", timeAfterPublish)
 	log.WithField("msNeededForPublishing", msNeededForPublishing).Info("block published through beacon node")
-
-	// Remember that getPayload has already been called
-	go func() {
-		err := api.redis.SetStats(datastore.RedisStatsFieldSlotLastPayloadDelivered, payload.Slot())
-		if err != nil {
-			log.WithError(err).Error("failed to save delivered payload slot to redis")
-		}
-	}()
 
 	// give the beacon network some time to propagate the block
 	time.Sleep(time.Duration(getPayloadResponseDelayMs) * time.Millisecond)
@@ -1394,10 +1399,12 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 
 	// Log at start and end of request
 	log.Info("request initiated")
-	defer log.WithFields(logrus.Fields{
-		"timestampRequestFin": time.Now().UTC().UnixMilli(),
-		"requestDurationMs":   time.Since(receivedAt).Milliseconds(),
-	}).Info("request finished")
+	defer func() {
+		log.WithFields(logrus.Fields{
+			"timestampRequestFin": time.Now().UTC().UnixMilli(),
+			"requestDurationMs":   time.Since(receivedAt).Milliseconds(),
+		}).Info("request finished")
+	}()
 
 	// If cancellations are disabled but builder requested it, return error
 	if isCancellationEnabled && !api.ffEnableCancellations {
@@ -1582,7 +1589,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	}
 
 	// Reject new submissions once the payload for this slot was delivered - TODO: store in memory as well
-	slotLastPayloadDelivered, err := api.redis.GetStatsUint64(datastore.RedisStatsFieldSlotLastPayloadDelivered)
+	slotLastPayloadDelivered, err := api.redis.GetLastSlotDelivered()
 	if err != nil && !errors.Is(err, redis.Nil) {
 		log.WithError(err).Error("failed to get delivered payload slot from redis")
 	} else if payload.Slot() <= slotLastPayloadDelivered {
@@ -1591,20 +1598,20 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 		return
 	}
 
-	var simErr error
-	var optimisticSubmission bool
+	var wasSimulated, optimisticSubmission bool
+	var requestErr, validationErr error
 	var eligibleAt time.Time
 
 	// Save the builder submission to the database whenever this function ends
 	defer func() {
 		savePayloadToDatabase := !api.ffDisablePayloadDBStorage
-		submissionEntry, err := api.db.SaveBuilderBlockSubmission(payload, simErr, receivedAt, eligibleAt, savePayloadToDatabase, pf, optimisticSubmission)
+		submissionEntry, err := api.db.SaveBuilderBlockSubmission(payload, requestErr, validationErr, receivedAt, eligibleAt, wasSimulated, savePayloadToDatabase, pf, optimisticSubmission)
 		if err != nil {
 			log.WithError(err).WithField("payload", payload).Error("saving builder block submission to database failed")
 			return
 		}
 
-		err = api.db.UpsertBlockBuilderEntryAfterSubmission(submissionEntry, simErr != nil)
+		err = api.db.UpsertBlockBuilderEntryAfterSubmission(submissionEntry, validationErr != nil)
 		if err != nil {
 			log.WithError(err).Error("failed to upsert block-builder-entry")
 		}
@@ -1655,21 +1662,34 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 		go api.processOptimisticBlock(opts)
 	} else {
 		// Simulate block (synchronously).
-		simErr = api.simulateBlock(req.Context(), opts)
-		if simErr != nil {
-			log = log.WithField("simErr", simErr.Error())
-			log.WithError(simErr).WithFields(logrus.Fields{
-				"durationMs": time.Since(timeBeforeValidation).Milliseconds(),
-				"numWaiting": api.blockSimRateLimiter.currentCounter(),
-			}).Info("block validation failed")
-
-			if os.IsTimeout(simErr) {
+		reqErr, simErr := api.simulateBlock(req.Context(), opts)
+		validationDurationMs := time.Since(timeBeforeValidation).Milliseconds()
+		log = log.WithFields(logrus.Fields{
+			"timestampAfterValidation": time.Now().UTC().UnixMilli(),
+			"validationDurationMs":     validationDurationMs,
+		})
+		if reqErr != nil {
+			// Request error -- log and return error
+			log.WithFields(logrus.Fields{
+				"requestErr": reqErr.Error(),
+				"durationMs": validationDurationMs,
+			}).Info("block validation failed - request error")
+			if os.IsTimeout(reqErr) {
 				api.RespondError(w, http.StatusGatewayTimeout, "validation request timeout")
+			} else {
+				api.RespondError(w, http.StatusBadRequest, reqErr.Error())
+			}
+			return
+		} else {
+			wasSimulated = true
+			if simErr != nil {
+				log.WithFields(logrus.Fields{
+					"validationErr": simErr.Error(),
+					"durationMs":    validationDurationMs,
+				}).Info("block validation failed - validation error")
+				api.RespondError(w, http.StatusBadRequest, simErr.Error())
 				return
 			}
-
-			api.RespondError(w, http.StatusBadRequest, simErr.Error())
-			return
 		}
 	}
 
@@ -1679,27 +1699,20 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 
 	log = log.WithField("timestampAfterValidation", time.Now().UTC().UnixMilli())
 	log.WithFields(logrus.Fields{
-		"durationMs": time.Since(timeBeforeValidation).Milliseconds(),
-		"numWaiting": api.blockSimRateLimiter.currentCounter(),
+		"numWaiting": api.blockSimRateLimiter.CurrentCounter(),
 	}).Info("block validation successful")
 
+	// If cancellations are enabled, then abort now if this submission is not the latest one
 	if isCancellationEnabled {
-		// Ensure this request is still the latest one. This logic intentionally
-		// ignores the value of the bids and makes the current active bid the one
-		// that arrived at the relay last. This allows for builders to reduce the
-		// value of their bid (effectively cancel a high bid) by ensuring a lower
-		// bid arrives later. Even if the higher bid takes longer to simulate,
-		// by checking the receivedAt timestamp, this logic ensures that the low bid
+		// Ensure this request is still the latest one. This logic intentionally ignores the value of the bids and makes the current active bid the one
+		// that arrived at the relay last. This allows for builders to reduce the value of their bid (effectively cancel a high bid) by ensuring a lower
+		// bid arrives later. Even if the higher bid takes longer to simulate, by checking the receivedAt timestamp, this logic ensures that the low bid
 		// is not overwritten by the high bid.
 		//
-		// NOTE: this can lead to a rather tricky race condition. If a builder
-		// submits two blocks to the relay concurrently, then the randomness of
-		// network latency will make it impossible to predict which arrives first.
-		// Thus a high bid could unintentionally be overwritten by a low bid that
-		// happened to arrive a few microseconds later. If builders are submitting
-		// blocks at a frequency where they cannot reliably predict which bid will
-		// arrive at the relay first, they should instead use multiple pubkeys to
-		// avoid uninitentionally overwriting their own bids.
+		// NOTE: this can lead to a rather tricky race condition. If a builder submits two blocks to the relay concurrently, then the randomness of network
+		// latency will make it impossible to predict which arrives first. Thus a high bid could unintentionally be overwritten by a low bid that happened
+		// to arrive a few microseconds later. If builders are submitting blocks at a frequency where they cannot reliably predict which bid will arrive at
+		// the relay first, they should instead use multiple pubkeys to avoid uninitentionally overwriting their own bids.
 		latestPayloadReceivedAt, err := api.redis.GetBuilderLatestPayloadReceivedAt(payload.Slot(), payload.BuilderPubkey().String(), payload.ParentHash(), payload.ProposerPubkey())
 		if err != nil {
 			log.WithError(err).Error("failed getting latest payload receivedAt from redis")

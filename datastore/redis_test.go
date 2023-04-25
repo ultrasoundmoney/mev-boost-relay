@@ -1,13 +1,17 @@
 package datastore
 
 import (
+	"context"
+	"errors"
 	"math/big"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/flashbots/go-boost-utils/types"
 	"github.com/flashbots/mev-boost-relay/common"
+	"github.com/go-redis/redis/v9"
 	"github.com/stretchr/testify/require"
 )
 
@@ -18,7 +22,7 @@ func setupTestRedis(t *testing.T) *RedisCache {
 	redisTestServer, err := miniredis.Run()
 	require.NoError(t, err)
 
-	redisService, err := NewRedisCache(redisTestServer.Addr(), "", "")
+	redisService, err := NewRedisCache("", redisTestServer.Addr(), "")
 	require.NoError(t, err)
 
 	return redisService
@@ -281,9 +285,9 @@ func TestRedisURIs(t *testing.T) {
 	require.NoError(t, err)
 
 	// test connection with and without protocol
-	_, err = NewRedisCache(redisTestServer.Addr(), "", "")
+	_, err = NewRedisCache("", redisTestServer.Addr(), "")
 	require.NoError(t, err)
-	_, err = NewRedisCache("redis://"+redisTestServer.Addr(), "", "")
+	_, err = NewRedisCache("", "redis://"+redisTestServer.Addr(), "")
 	require.NoError(t, err)
 
 	// test connection w/ credentials
@@ -291,14 +295,106 @@ func TestRedisURIs(t *testing.T) {
 	password := "pass"
 	redisTestServer.RequireUserAuth(username, password)
 	fullURL := "redis://" + username + ":" + password + "@" + redisTestServer.Addr()
-	_, err = NewRedisCache(fullURL, "", "")
+	_, err = NewRedisCache("", fullURL, "")
 	require.NoError(t, err)
 
 	// ensure malformed URL throws error
 	malformURL := "http://" + username + ":" + password + "@" + redisTestServer.Addr()
-	_, err = NewRedisCache(malformURL, "", "")
+	_, err = NewRedisCache("", malformURL, "")
 	require.Error(t, err)
 	malformURL = "redis://" + username + ":" + "wrongpass" + "@" + redisTestServer.Addr()
-	_, err = NewRedisCache(malformURL, "", "")
+	_, err = NewRedisCache("", malformURL, "")
 	require.Error(t, err)
+}
+
+func TestCheckAndSetLastSlotDelivered(t *testing.T) {
+	cache := setupTestRedis(t)
+	newSlot := uint64(123)
+
+	// should return redis.Nil if wasn't set
+	slot, err := cache.GetLastSlotDelivered()
+	require.ErrorIs(t, err, redis.Nil)
+	require.Equal(t, uint64(0), slot)
+
+	// should be able to set once
+	err = cache.CheckAndSetLastSlotDelivered(newSlot)
+	require.NoError(t, err)
+
+	// should get slot
+	slot, err = cache.GetLastSlotDelivered()
+	require.NoError(t, err)
+	require.Equal(t, newSlot, slot)
+
+	// should fail on second time
+	err = cache.CheckAndSetLastSlotDelivered(newSlot)
+	require.ErrorIs(t, err, ErrSlotAlreadyDelivered)
+
+	// should also fail on earlier slots
+	err = cache.CheckAndSetLastSlotDelivered(newSlot - 1)
+	require.ErrorIs(t, err, ErrSlotAlreadyDelivered)
+}
+
+// Test_CheckAndSetLastSlotDeliveredForTesting ensures the optimistic locking works
+// i.e. running CheckAndSetLastSlotDelivered leading to err == redis.TxFailedErr
+func Test_CheckAndSetLastSlotDeliveredForTesting(t *testing.T) {
+	cache := setupTestRedis(t)
+	newSlot := uint64(123)
+	n := 3
+
+	errC := make(chan error, n)
+	waitC := make(chan bool, n)
+	syncWG := sync.WaitGroup{}
+
+	// Kick off goroutines, that will all try to set the same slot
+	for i := 0; i < n; i++ {
+		syncWG.Add(1)
+		go func() {
+			errC <- _CheckAndSetLastSlotDeliveredForTesting(cache, waitC, &syncWG, newSlot)
+		}()
+	}
+
+	syncWG.Wait()
+
+	// Continue first goroutine (should succeed)
+	waitC <- true
+	err := <-errC
+	require.NoError(t, err)
+
+	// Continue all other goroutines (all should return the race error redis.TxFailedErr)
+	for i := 1; i < n; i++ {
+		waitC <- true
+		err := <-errC
+		require.ErrorIs(t, err, redis.TxFailedErr)
+	}
+
+	// Any later call should return ErrSlotAlreadyDelivered
+	err = _CheckAndSetLastSlotDeliveredForTesting(cache, waitC, &syncWG, newSlot)
+	waitC <- true
+	require.ErrorIs(t, err, ErrSlotAlreadyDelivered)
+}
+
+func _CheckAndSetLastSlotDeliveredForTesting(r *RedisCache, waitC chan bool, wg *sync.WaitGroup, slot uint64) (err error) {
+	// copied from redis.go, with added channel and waitgroup to test the race condition in a controlled way
+	txf := func(tx *redis.Tx) error {
+		lastSlotDelivered, err := tx.Get(context.Background(), r.keyLastSlotDelivered).Uint64()
+		if err != nil && !errors.Is(err, redis.Nil) {
+			return err
+		}
+
+		if slot <= lastSlotDelivered {
+			return ErrSlotAlreadyDelivered
+		}
+
+		wg.Done()
+		<-waitC
+
+		_, err = tx.TxPipelined(context.Background(), func(pipe redis.Pipeliner) error {
+			pipe.Set(context.Background(), r.keyLastSlotDelivered, slot, 0)
+			return nil
+		})
+
+		return err
+	}
+
+	return r.client.Watch(context.Background(), txf, r.keyLastSlotDelivered)
 }
