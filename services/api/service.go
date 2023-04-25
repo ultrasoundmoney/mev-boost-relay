@@ -1810,10 +1810,12 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 
 	// Log at start and end of request
 	log.Info("request initiated")
-	defer log.WithFields(logrus.Fields{
-		"timestampRequestFin": time.Now().UTC().UnixMilli(),
-		"requestDurationMs":   time.Since(receivedAt).Milliseconds(),
-	}).Info("request finished")
+	defer func() {
+		log.WithFields(logrus.Fields{
+			"timestampRequestFin": time.Now().UTC().UnixMilli(),
+			"requestDurationMs":   time.Since(receivedAt).Milliseconds(),
+		}).Info("request finished")
+	}()
 
 	// If cancellations are disabled but builder requested it, return error
 	if isCancellationEnabled && !api.ffEnableCancellations {
@@ -1843,9 +1845,11 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 	var sig boostTypes.Signature
 	var bidFound, headerFound, sigFound bool
 	dec := json.NewDecoder(rHeader)
+	log.Info("starting header only parsing")
 	for !bidFound || !headerFound || !sigFound {
 		t, err := dec.Token()
 		if err == io.EOF {
+			log.Info("parsing reach EOF without finding bid, header, and sig")
 			break
 		}
 		if err != nil {
@@ -1853,6 +1857,7 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 			api.RespondError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		log.Infof("token parsed: %v", t)
 		if t == "message" {
 			err = dec.Decode(&bid)
 			if err != nil {
