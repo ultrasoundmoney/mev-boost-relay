@@ -6,7 +6,6 @@ import (
 	"compress/gzip"
 	"context"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1842,7 +1841,7 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 	// Parsing starts by finding Message, Header and Signature.
 	var bid v1.BidTrace
 	var header capellaspec.ExecutionPayloadHeader
-	var sig boostTypes.Signature
+	var sig phase0.BLSSignature
 	var bidFound, headerFound, sigFound bool
 	dec := json.NewDecoder(rHeader)
 	log.Info("starting header only parsing")
@@ -1868,7 +1867,7 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 				return
 			}
 			bidFound = true
-			log.Infof("successfully parsed message: %v", bid)
+			log.Infof("successfully parsed message: %+v", bid)
 		}
 		if t == "ExecutionPayloadHeader" {
 			log.Info("parsing ExecutionPayloadHeader")
@@ -1879,27 +1878,13 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 				return
 			}
 			headerFound = true
-			log.Infof("successfully parsed ExecutionPayloadHeader: %v", header)
+			log.Infof("successfully parsed ExecutionPayloadHeader: %+v", header)
 		}
 		if t == "Signature" {
 			log.Info("parsing Signature")
-			sigT, err := dec.Token()
-			if err != nil {
-				log.WithError(err).Warn("could not get signature from req")
-				api.RespondError(w, http.StatusBadRequest, err.Error())
-				return
-			}
-			log.Info("decoding signature to hex")
-			sigB, err := hex.DecodeString(sigT.(string)[2:])
+			err = dec.Decode(&sig)
 			if err != nil {
 				log.WithError(err).Warn("could not decode signature")
-				api.RespondError(w, http.StatusBadRequest, err.Error())
-				return
-			}
-			log.Info("constructing signature object")
-			err = sig.FromSlice(sigB)
-			if err != nil {
-				log.WithError(err).Warn("could not read signature from slice")
 				api.RespondError(w, http.StatusBadRequest, err.Error())
 				return
 			}
