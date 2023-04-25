@@ -1860,6 +1860,7 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 		}
 		log.Infof("token parsed: %v", t)
 		if t == "Message" {
+			log.Info("parsing message")
 			err = dec.Decode(&bid)
 			if err != nil {
 				log.WithError(err).Warn("could not decode bid trace")
@@ -1867,8 +1868,10 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 				return
 			}
 			bidFound = true
+			log.Infof("successfully parsed message: %v", bid)
 		}
 		if t == "ExecutionPayloadHeader" {
+			log.Info("parsing ExecutionPayloadHeader")
 			err = dec.Decode(&header)
 			if err != nil {
 				log.WithError(err).Warn("could not decode execution payload header")
@@ -1876,15 +1879,24 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 				return
 			}
 			headerFound = true
+			log.Infof("successfully parsed ExecutionPayloadHeader: %v", header)
 		}
 		if t == "Signature" {
-			sigT, _ := dec.Token()
+			log.Info("parsing Signature")
+			sigT, err := dec.Token()
+			if err != nil {
+				log.WithError(err).Warn("could not get signature from req")
+				api.RespondError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			log.Info("decoding signature to hex")
 			sigB, err := hex.DecodeString(sigT.(string)[2:])
 			if err != nil {
 				log.WithError(err).Warn("could not decode signature")
 				api.RespondError(w, http.StatusBadRequest, err.Error())
 				return
 			}
+			log.Info("constructing signature object")
 			err = sig.FromSlice(sigB)
 			if err != nil {
 				log.WithError(err).Warn("could not read signature from slice")
@@ -1892,6 +1904,7 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 				return
 			}
 			sigFound = true
+			log.Infof("successfully parsed Signature: %v", sig)
 		}
 		if t == "Transactions" {
 			log.Warn("transactions preempts bid, header, or payload")
