@@ -25,10 +25,7 @@ var (
 	apiDefaultLogTag     = os.Getenv("LOG_TAG")
 
 	apiDefaultPprofEnabled       = os.Getenv("PPROF") == "1"
-	apiDefaultBuilderAPIEnabled  = os.Getenv("ENABLE_BUILDER_API") == "1"
-	apiDefaultDataAPIEnabled     = os.Getenv("ENABLE_DATA_API") == "1"
 	apiDefaultInternalAPIEnabled = os.Getenv("ENABLE_INTERNAL_API") == "1"
-	apiDefaultProposerAPIEnabled = os.Getenv("ENABLE_PROPOSER_API") == "1"
 
 	// Default Builder, Data, and Proposer API as true.
 	apiDefaultBuilderAPIEnabled  = os.Getenv("DISABLE_BUILDER_API") != "1"
