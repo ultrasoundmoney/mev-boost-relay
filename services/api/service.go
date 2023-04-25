@@ -1850,7 +1850,8 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 		t, err := dec.Token()
 		if err == io.EOF {
 			log.Info("parsing reach EOF without finding bid, header, and sig")
-			break
+			api.RespondError(w, http.StatusBadRequest, "header-only parsing failed")
+			return
 		}
 		if err != nil {
 			log.WithError(err).Warn("could not read payload")
@@ -1858,7 +1859,7 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 			return
 		}
 		log.Infof("token parsed: %v", t)
-		if t == "message" {
+		if t == "Message" {
 			err = dec.Decode(&bid)
 			if err != nil {
 				log.WithError(err).Warn("could not decode bid trace")
@@ -1867,7 +1868,7 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 			}
 			bidFound = true
 		}
-		if t == "execution_payload_header" {
+		if t == "ExecutionPayloadHeader" {
 			err = dec.Decode(&header)
 			if err != nil {
 				log.WithError(err).Warn("could not decode execution payload header")
@@ -1876,7 +1877,7 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 			}
 			headerFound = true
 		}
-		if t == "signature" {
+		if t == "Signature" {
 			sigT, _ := dec.Token()
 			sigB, err := hex.DecodeString(sigT.(string)[2:])
 			if err != nil {
@@ -1892,10 +1893,10 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 			}
 			sigFound = true
 		}
-		if t == "transactions" {
+		if t == "Transactions" {
 			log.Warn("transaction list preempts bid, header, or payload")
 		}
-		if t == "withdrawals" {
+		if t == "Withdrawals" {
 			log.Warn("transaction list preempts bid, header, or payload")
 		}
 	}
