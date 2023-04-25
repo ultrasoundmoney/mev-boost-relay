@@ -1844,7 +1844,6 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 	var sig phase0.BLSSignature
 	var bidFound, headerFound, sigFound bool
 	dec := json.NewDecoder(rHeader)
-	log.Info("starting header only parsing")
 	for !bidFound || !headerFound || !sigFound {
 		t, err := dec.Token()
 		if err == io.EOF {
@@ -1857,9 +1856,7 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 			api.RespondError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		log.Infof("token parsed: %v", t)
 		if t == "Message" {
-			log.Info("parsing message")
 			err = dec.Decode(&bid)
 			if err != nil {
 				log.WithError(err).Warn("could not decode bid trace")
@@ -1867,10 +1864,8 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 				return
 			}
 			bidFound = true
-			log.Infof("successfully parsed message: %+v", bid)
 		}
 		if t == "ExecutionPayloadHeader" {
-			log.Info("parsing ExecutionPayloadHeader")
 			err = dec.Decode(&header)
 			if err != nil {
 				log.WithError(err).Warn("could not decode execution payload header")
@@ -1878,10 +1873,8 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 				return
 			}
 			headerFound = true
-			log.Infof("successfully parsed ExecutionPayloadHeader: %+v", header)
 		}
 		if t == "Signature" {
-			log.Info("parsing Signature")
 			err = dec.Decode(&sig)
 			if err != nil {
 				log.WithError(err).Warn("could not decode signature")
@@ -1889,7 +1882,6 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 				return
 			}
 			sigFound = true
-			log.Infof("successfully parsed Signature: %v", sig)
 		}
 		if t == "Transactions" {
 			log.Warn("transactions preempts bid, header, or payload")
@@ -1902,12 +1894,6 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 	nextTime = time.Now().UTC()
 	pf.Decode = uint64(nextTime.Sub(prevTime).Microseconds())
 	prevTime = nextTime
-
-	log.WithFields(logrus.Fields{
-		"bid":         bid,
-		"signature":   sig,
-		"decode_time": pf.Decode,
-	}).Info("bid parsed, attempting to verify signature")
 
 	log = log.WithFields(logrus.Fields{
 		"timestampAfterDecoding": time.Now().UTC().UnixMilli(),
@@ -1927,8 +1913,9 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 	}
 
 	log.WithFields(logrus.Fields{
-		"bid":       bid,
-		"signature": sig,
+		"bid":         bid,
+		"signature":   sig,
+		"decode_time": pf.Decode,
 	}).Info("optimistically parsed bid and verified signature")
 
 	// Check optimistic eligibility.
@@ -1953,8 +1940,6 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 	log = log.WithFields(logrus.Fields{
 		"builderEntry": builderEntry,
 	})
-
-	log.Info("builder entry eligible for optimistic relaying")
 
 	// Optimistic prechecks.
 	if bid.Slot <= headSlot {
