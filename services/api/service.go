@@ -1894,16 +1894,22 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 			sigFound = true
 		}
 		if t == "Transactions" {
-			log.Warn("transaction list preempts bid, header, or payload")
+			log.Warn("transactions preempts bid, header, or payload")
 		}
 		if t == "Withdrawals" {
-			log.Warn("transaction list preempts bid, header, or payload")
+			log.Warn("withdrawals preempts bid, header, or payload")
 		}
 	}
 
 	nextTime = time.Now().UTC()
 	pf.Decode = uint64(nextTime.Sub(prevTime).Microseconds())
 	prevTime = nextTime
+
+	log.WithFields(logrus.Fields{
+		"bid":         bid,
+		"signature":   sig,
+		"decode_time": pf.Decode,
+	}).Info("bid parsed, attempting to verify signature")
 
 	log = log.WithFields(logrus.Fields{
 		"timestampAfterDecoding": time.Now().UTC().UnixMilli(),
@@ -1921,6 +1927,11 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 		api.RespondError(w, http.StatusBadRequest, "invalid signature")
 		return
 	}
+
+	log.WithFields(logrus.Fields{
+		"bid":       bid,
+		"signature": sig,
+	}).Info("optimistically parsed bid and verified signature")
 
 	// Check optimistic eligibility.
 	builderPubkey := bid.BuilderPubkey
@@ -1944,10 +1955,8 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 	log = log.WithFields(logrus.Fields{
 		"builderEntry": builderEntry,
 	})
-	log.WithFields(logrus.Fields{
-		"bid":       bid,
-		"signature": sig,
-	}).Info("optimistically parsed bid and verified signature")
+
+	log.Info("builder entry eligible for optimistic relaying")
 
 	// Optimistic prechecks.
 	if bid.Slot <= headSlot {
