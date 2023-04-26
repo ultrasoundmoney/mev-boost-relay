@@ -397,7 +397,7 @@ func (s *DatabaseService) GetBuilderSubmissions(filters GetBuilderSubmissionsFil
 	limit := "LIMIT :limit"
 
 	whereConds := []string{
-		"sim_success = true",
+		"(sim_success = true OR optimistic_submission = true)",
 	}
 	if filters.Slot > 0 {
 		whereConds = append(whereConds, "slot = :slot")
