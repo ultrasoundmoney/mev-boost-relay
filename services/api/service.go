@@ -559,7 +559,7 @@ func (api *RelayAPI) demoteBuilder(pubkey string, req *common.BuilderSubmitBlock
 		IsOptimistic:  false,
 	}
 	api.log.Infof("demoted builder, new status: %v", newStatus)
-	if err := api.db.SetBlockBuilderStatus(pubkey, newStatus); err != nil {
+	if err := api.db.SetBlockBuilderStatus(pubkey, newStatus, true); err != nil {
 		api.log.Error(fmt.Errorf("error setting builder: %v status: %v", pubkey, err))
 	}
 	// Write to demotions table.
@@ -2098,7 +2098,7 @@ func (api *RelayAPI) handleInternalBuilderStatus(w http.ResponseWriter, req *htt
 			"isBlacklisted": st.IsBlacklisted,
 			"isOptimistic":  st.IsOptimistic,
 		}).Info("updating builder status")
-		err := api.db.SetBlockBuilderStatus(builderPubkey, st)
+		err := api.db.SetBlockBuilderStatus(builderPubkey, st, false)
 		if err != nil {
 			err := fmt.Errorf("error setting builder: %v status: %v", builderPubkey, err)
 			api.log.Error(err)

@@ -41,7 +41,7 @@ type IDatabaseService interface {
 
 	GetBlockBuilders() ([]*BlockBuilderEntry, error)
 	GetBlockBuilderByPubkey(pubkey string) (*BlockBuilderEntry, error)
-	SetBlockBuilderStatus(pubkey string, status common.BuilderStatus) error
+	SetBlockBuilderStatus(pubkey string, status common.BuilderStatus, allKeys bool) error
 	SetBlockBuilderCollateral(pubkey, builderID, collateral string) error
 	UpsertBlockBuilderEntryAfterSubmission(lastSubmission *BuilderBlockSubmissionEntry, isError bool) error
 	IncBlockBuilderStatsAfterGetPayload(builderPubkey string) error
@@ -490,18 +490,18 @@ func (s *DatabaseService) GetBlockBuilderByPubkey(pubkey string) (*BlockBuilderE
 	return entry, err
 }
 
-func (s *DatabaseService) SetBlockBuilderStatus(pubkey string, status common.BuilderStatus) error {
+func (s *DatabaseService) SetBlockBuilderStatus(pubkey string, status common.BuilderStatus, allKeys bool) error {
 	builder, err := s.GetBlockBuilderByPubkey(pubkey)
 	if err != nil {
 		return fmt.Errorf("unable to read block builder: %v, %w", pubkey, err)
 	}
 	var query string
 	queryPrefix := `UPDATE ` + vars.TableBlockBuilder + ` SET is_high_prio=$1, is_blacklisted=$2, is_optimistic=$3 `
-	// If no builder ID is present, just update the status of the single builder pubkey.
-	if builder.BuilderID == "" {
-		query = queryPrefix + fmt.Sprintf("WHERE builder_pubkey='%v';", pubkey)
-	} else { // If there is a builder ID, then update statuses of all pubkeys.
+	// If there is a builder ID and allKeys is true, then update statuses of all pubkeys.
+	if builder.BuilderID != "" && allKeys {
 		query = queryPrefix + fmt.Sprintf("WHERE builder_id='%v';", builder.BuilderID)
+	} else { // Otherwise, just update the single pubkey.
+		query = queryPrefix + fmt.Sprintf("WHERE builder_pubkey='%v';", pubkey)
 	}
 	_, err = s.DB.Exec(query, status.IsHighPrio, status.IsBlacklisted, status.IsOptimistic)
 	return err

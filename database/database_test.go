@@ -233,12 +233,12 @@ func TestSetBlockBuilderStatus(t *testing.T) {
 	err = db.SetBlockBuilderStatus(pubkey1, common.BuilderStatus{
 		IsHighPrio:   true,
 		IsOptimistic: true,
-	})
+	}, true)
 	require.NoError(t, err)
 	err = db.SetBlockBuilderStatus(pubkey3, common.BuilderStatus{
 		IsHighPrio:   true,
 		IsOptimistic: true,
-	})
+	}, true)
 	require.NoError(t, err)
 
 	// After status change, builders 1, 2, 3 should be modified.
@@ -255,6 +255,22 @@ func TestSetBlockBuilderStatus(t *testing.T) {
 	require.False(t, builder.IsHighPrio)
 	require.False(t, builder.IsOptimistic)
 	require.False(t, builder.IsBlacklisted)
+
+	// Update status of just builder 1.
+	err = db.SetBlockBuilderStatus(pubkey1, common.BuilderStatus{
+		IsHighPrio:   true,
+		IsOptimistic: false,
+	}, false)
+	require.NoError(t, err)
+	// Builder 1 should be non-optimistic.
+	builder, err = db.GetBlockBuilderByPubkey(pubkey1)
+	require.NoError(t, err)
+	require.False(t, builder.IsOptimistic)
+
+	// Builder 2 should be optimistic.
+	builder, err = db.GetBlockBuilderByPubkey(pubkey2)
+	require.NoError(t, err)
+	require.True(t, builder.IsOptimistic)
 }
 
 func TestSetBlockBuilderCollateral(t *testing.T) {
