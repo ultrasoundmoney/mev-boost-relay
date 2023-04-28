@@ -65,6 +65,12 @@ func newTestBackend(t require.TestingT, numBeaconNodes int) *testBackend {
 	relay, err := NewRelayAPI(opts)
 	require.NoError(t, err)
 
+	relay.genesisInfo = &beaconclient.GetGenesisResponse{
+		Data: beaconclient.GetGenesisResponseData{
+			GenesisTime: 1606824023,
+		},
+	}
+
 	backend := testBackend{
 		t:         t,
 		relay:     relay,
@@ -185,14 +191,13 @@ func TestRegisterValidator(t *testing.T) {
 		require.True(t, ok)
 		require.Equal(t, pubkeyHex, pkH)
 
-		rr := backend.request(http.MethodPost, path, []types.SignedValidatorRegistration{common.ValidPayloadRegisterValidator})
+		payload := []types.SignedValidatorRegistration{common.ValidPayloadRegisterValidator}
+		rr := backend.request(http.MethodPost, path, payload)
 		require.Equal(t, http.StatusOK, rr.Code)
 		time.Sleep(20 * time.Millisecond) // registrations are processed asynchronously
 
-		// req, err := backend.datastore.GetValidatorRegistration(pubkeyHex)
-		// require.NoError(t, err)
-		// require.NotNil(t, req)
-		// require.Equal(t, pubkeyHex, req.Message.Pubkey.PubkeyHex())
+		isKnown := backend.datastore.IsKnownValidator(pubkeyHex)
+		require.True(t, isKnown)
 	})
 
 	t.Run("not a known validator", func(t *testing.T) {
@@ -279,18 +284,21 @@ func TestBuilderApiGetValidators(t *testing.T) {
 	path := "/relay/v1/builder/validators"
 
 	backend := newTestBackend(t, 1)
-	backend.relay.proposerDutiesResponse = []types.BuilderGetValidatorsResponseEntry{
+	duties := []common.BuilderGetValidatorsResponseEntry{
 		{
 			Slot:  1,
 			Entry: &common.ValidPayloadRegisterValidator,
 		},
 	}
+	responseBytes, err := json.Marshal(duties)
+	require.NoError(t, err)
+	backend.relay.proposerDutiesResponse = &responseBytes
 
 	rr := backend.request(http.MethodGet, path, nil)
 	require.Equal(t, http.StatusOK, rr.Code)
 
-	resp := []types.BuilderGetValidatorsResponseEntry{}
-	err := json.Unmarshal(rr.Body.Bytes(), &resp)
+	resp := []common.BuilderGetValidatorsResponseEntry{}
+	err = json.Unmarshal(rr.Body.Bytes(), &resp)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(resp))
 	require.Equal(t, uint64(1), resp[0].Slot)

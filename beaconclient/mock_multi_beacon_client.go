@@ -25,6 +25,10 @@ func (*MockMultiBeaconClient) FetchValidators(headSlot uint64) (map[types.Pubkey
 	return nil, nil
 }
 
+func (*MockMultiBeaconClient) GetStateValidators(stateID string) (map[types.PubkeyHex]ValidatorResponseEntry, error) {
+	return nil, nil
+}
+
 func (*MockMultiBeaconClient) GetProposerDuties(epoch uint64) (*ProposerDutiesResponse, error) {
 	return nil, nil
 }

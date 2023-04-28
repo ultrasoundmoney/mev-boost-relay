@@ -83,12 +83,16 @@ func startTestBackend(t *testing.T) (*phase0.BLSPubKey, *bls.SecretKey, *testBac
 	backend := newTestBackend(t, 1)
 	backend.relay.genesisInfo = &beaconclient.GetGenesisResponse{}
 	backend.relay.genesisInfo.Data.GenesisTime = 0
-	backend.relay.proposerDutiesMap = map[uint64]*boostTypes.RegisterValidatorRequestMessage{
-		slot: {
-			FeeRecipient: [20]byte(feeRecipient),
-			GasLimit:     5000,
-			Timestamp:    0xffffffff,
-			Pubkey:       [48]byte(phase0.BLSPubKey{}),
+	backend.relay.proposerDutiesMap = map[uint64]*common.BuilderGetValidatorsResponseEntry{
+		slot: &common.BuilderGetValidatorsResponseEntry{
+			Entry: &boostTypes.SignedValidatorRegistration{
+				Message: &boostTypes.RegisterValidatorRequestMessage{
+					FeeRecipient: [20]byte(feeRecipient),
+					GasLimit:     5000,
+					Timestamp:    0xffffffff,
+					Pubkey:       [48]byte(phase0.BLSPubKey{}),
+				},
+			},
 		},
 	}
 	backend.relay.opts.BlockBuilderAPI = true
