@@ -26,6 +26,7 @@ import (
 	capellaspec "github.com/attestantio/go-eth2-client/spec/capella"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
 	"github.com/buger/jsonparser"
+	ssz "github.com/ferranbt/fastssz"
 	"github.com/flashbots/go-boost-utils/bls"
 	boostTypes "github.com/flashbots/go-boost-utils/types"
 	"github.com/flashbots/go-utils/cli"
@@ -1903,6 +1904,57 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	w.WriteHeader(http.StatusOK)
 }
 
+// SubmitBlockHeaderRequest is the v2 request from the builder to submit a block.
+type SubmitBlockHeaderRequest struct {
+	Message                *v1.BidTrace
+	ExecutionPayloadHeader *capellaspec.ExecutionPayloadHeader
+	Signature              phase0.BLSSignature `ssz-size:"96"`
+}
+
+// UnmarshalSSZ ssz unmarshals the SubmitBlockHeaderRequest object
+func (s *SubmitBlockHeaderRequest) UnmarshalSSZ(buf []byte) error {
+	var err error
+	size := uint64(len(buf))
+	if size < 336 {
+		return ssz.ErrSize
+	}
+
+	tail := buf
+	var o1 uint64
+
+	// Field (0) 'Message'
+	if s.Message == nil {
+		s.Message = new(v1.BidTrace)
+	}
+	if err = s.Message.UnmarshalSSZ(buf[0:236]); err != nil {
+		return err
+	}
+
+	// Offset (1) 'ExecutionPayloadHeader'
+	if o1 = ssz.ReadOffset(buf[236:240]); o1 > size {
+		return ssz.ErrOffset
+	}
+
+	if o1 < 336 {
+		return ssz.ErrInvalidVariableOffset
+	}
+
+	// Field (2) 'Signature'
+	copy(s.Signature[:], buf[240:336])
+
+	// Field (1) 'ExecutionPayloadHeader'
+	{
+		buf = tail[o1:]
+		if s.ExecutionPayloadHeader == nil {
+			s.ExecutionPayloadHeader = new(capellaspec.ExecutionPayloadHeader)
+		}
+		if err = s.ExecutionPayloadHeader.UnmarshalSSZ(buf); err != nil {
+			return err
+		}
+	}
+	return err
+}
+
 func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Request) {
 	var pf common.Profile
 	var prevTime, nextTime time.Time
@@ -1953,62 +2005,29 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 	var buf bytes.Buffer
 	rHeader := io.TeeReader(r, &buf)
 
-	// Parsing starts by finding Message, Header and Signature.
-	var bid v1.BidTrace
-	var header capellaspec.ExecutionPayloadHeader
-	var sig phase0.BLSSignature
-	var bidFound, headerFound, sigFound bool
-	dec := json.NewDecoder(rHeader)
-	for !bidFound || !headerFound || !sigFound {
-		t, err := dec.Token()
-		if err == io.EOF {
-			log.Info("parsing reach EOF without finding bid, header, and sig")
-			api.RespondError(w, http.StatusBadRequest, "header-only parsing failed")
-			return
-		}
-		if err != nil {
-			log.WithError(err).Warn("could not read payload")
-			api.RespondError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		if t == "Message" {
-			err = dec.Decode(&bid)
-			if err != nil {
-				log.WithError(err).Warn("could not decode bid trace")
-				api.RespondError(w, http.StatusBadRequest, err.Error())
-				return
-			}
-			bidFound = true
-		}
-		if t == "ExecutionPayloadHeader" {
-			err = dec.Decode(&header)
-			if err != nil {
-				log.WithError(err).Warn("could not decode execution payload header")
-				api.RespondError(w, http.StatusBadRequest, err.Error())
-				return
-			}
-			headerFound = true
-		}
-		if t == "Signature" {
-			err = dec.Decode(&sig)
-			if err != nil {
-				log.WithError(err).Warn("could not decode signature")
-				api.RespondError(w, http.StatusBadRequest, err.Error())
-				return
-			}
-			sigFound = true
-		}
-		if t == "Transactions" {
-			log.Warn("transactions preempts bid, header, or payload")
-		}
-		if t == "Withdrawals" {
-			log.Warn("withdrawals preempts bid, header, or payload")
-		}
+	// For just header, read entire thing.
+	fBuf, err := io.ReadAll(rHeader)
+	if err != nil {
+		log.WithError(err).Warn("could not read full header")
+		api.RespondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	var header SubmitBlockHeaderRequest
+	err = header.UnmarshalSSZ(fBuf)
+	if err != nil {
+		log.WithError(err).Warn("could not unmarshall request")
+		api.RespondError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	nextTime = time.Now().UTC()
 	pf.Decode = uint64(nextTime.Sub(prevTime).Microseconds())
 	prevTime = nextTime
+
+	bid := header.Message
+	sig := header.Signature
+	eph := header.ExecutionPayloadHeader
 
 	log = log.WithFields(logrus.Fields{
 		"timestampAfterDecoding": time.Now().UTC().UnixMilli(),
@@ -2020,7 +2039,7 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 		"value":                  bid.Value.String(),
 	})
 
-	ok, err := boostTypes.VerifySignature(&bid, api.opts.EthNetDetails.DomainBuilder, bid.BuilderPubkey[:], sig[:])
+	ok, err := boostTypes.VerifySignature(bid, api.opts.EthNetDetails.DomainBuilder, bid.BuilderPubkey[:], sig[:])
 	if !ok || err != nil {
 		log.WithError(err).Warn("could not verify builder signature")
 		api.RespondError(w, http.StatusBadRequest, "invalid signature")
@@ -2071,9 +2090,9 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 
 	// Timestamp check
 	expectedTimestamp := api.genesisInfo.Data.GenesisTime + (bid.Slot * common.SecondsPerSlot)
-	if header.Timestamp != expectedTimestamp {
-		log.Warnf("incorrect timestamp. got %d, expected %d", header.Timestamp, expectedTimestamp)
-		api.RespondError(w, http.StatusBadRequest, fmt.Sprintf("incorrect timestamp. got %d, expected %d", header.Timestamp, expectedTimestamp))
+	if eph.Timestamp != expectedTimestamp {
+		log.Warnf("incorrect timestamp. got %d, expected %d", eph.Timestamp, expectedTimestamp)
+		api.RespondError(w, http.StatusBadRequest, fmt.Sprintf("incorrect timestamp. got %d, expected %d", eph.Timestamp, expectedTimestamp))
 		return
 	}
 
@@ -2127,7 +2146,7 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 		return
 	}
 
-	randao := fmt.Sprintf("0x%x", header.PrevRandao)
+	randao := fmt.Sprintf("0x%x", eph.PrevRandao)
 	if randao != attrs.payloadAttributes.PrevRandao {
 		msg := fmt.Sprintf("incorrect prev_randao - got: %s, expected: %s", randao, attrs.payloadAttributes.PrevRandao)
 		log.Info(msg)
@@ -2135,8 +2154,8 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 		return
 	}
 
-	if header.WithdrawalsRoot != attrs.withdrawalsRoot {
-		msg := fmt.Sprintf("incorrect withdrawals root - got: %s, expected: %s", header.WithdrawalsRoot.String(), attrs.withdrawalsRoot.String())
+	if eph.WithdrawalsRoot != attrs.withdrawalsRoot {
+		msg := fmt.Sprintf("incorrect withdrawals root - got: %s, expected: %s", eph.WithdrawalsRoot.String(), attrs.withdrawalsRoot.String())
 		log.Info(msg)
 		api.RespondError(w, http.StatusBadRequest, msg)
 		return
