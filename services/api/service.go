@@ -138,6 +138,7 @@ type payloadAttributesHelper struct {
 // Data needed to issue a block validation request.
 type blockSimOptions struct {
 	isHighPrio bool
+	fastTrack  bool
 	log        *logrus.Entry
 	builder    *blockBuilderCacheEntry
 	req        *common.BuilderBlockValidationRequest
@@ -534,7 +535,7 @@ func (api *RelayAPI) startValidatorRegistrationDBProcessor() {
 // simulateBlock sends a request for a block simulation to blockSimRateLimiter.
 func (api *RelayAPI) simulateBlock(ctx context.Context, opts blockSimOptions) (error, error) {
 	t := time.Now()
-	reqErr, simErr := api.blockSimRateLimiter.Send(ctx, opts.req, opts.isHighPrio)
+	reqErr, simErr := api.blockSimRateLimiter.Send(ctx, opts.req, opts.isHighPrio, opts.fastTrack)
 	log := opts.log.WithFields(logrus.Fields{
 		"duration":   time.Since(t).Seconds(),
 		"numWaiting": api.blockSimRateLimiter.CurrentCounter(),
@@ -802,20 +803,18 @@ func (api *RelayAPI) startKnownValidatorUpdates() {
 }
 
 func (api *RelayAPI) RespondError(w http.ResponseWriter, code int, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	resp := HTTPErrorResp{code, message}
-	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		api.log.WithField("response", resp).WithError(err).Error("Couldn't write error response")
-		http.Error(w, "", http.StatusInternalServerError)
-	}
+	api.Respond(w, code, HTTPErrorResp{code, message})
 }
 
 func (api *RelayAPI) RespondOK(w http.ResponseWriter, response any) {
+	api.Respond(w, http.StatusOK, response)
+}
+
+func (api *RelayAPI) Respond(w http.ResponseWriter, code int, response any) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(code)
 	if err := json.NewEncoder(w).Encode(response); err != nil {
-		api.log.WithField("response", response).WithError(err).Error("Couldn't write OK response")
+		api.log.WithField("response", response).WithError(err).Error("Couldn't write response")
 		http.Error(w, "", http.StatusInternalServerError)
 	}
 }
@@ -1095,11 +1094,6 @@ func (api *RelayAPI) handleGetHeader(w http.ResponseWriter, req *http.Request) {
 
 	if slot < headSlot {
 		api.RespondError(w, http.StatusBadRequest, "slot is too old")
-		return
-	}
-
-	if slot > headSlot+1 {
-		api.RespondError(w, http.StatusBadRequest, "slot is too far into the future")
 		return
 	}
 
@@ -1563,14 +1557,8 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	}
 
 	if payload.Slot() <= headSlot {
-		api.log.Info("submitNewBlock failed: submission for past slot")
+		log.Info("submitNewBlock failed: submission for past slot")
 		api.RespondError(w, http.StatusBadRequest, "submission for past slot")
-		return
-	}
-
-	if payload.Slot() > headSlot+1 {
-		api.log.Info("submitNewBlock failed: submission for future slot")
-		api.RespondError(w, http.StatusBadRequest, "submission for future slot")
 		return
 	}
 
@@ -1633,7 +1621,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 
 	// Don't accept blocks with 0 value
 	if payload.Value().Cmp(ZeroU256.BigInt()) == 0 || payload.NumTx() == 0 {
-		api.log.Info("submitNewBlock failed: block with 0 value or no txs")
+		log.Info("submitNewBlock failed: block with 0 value or no txs")
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -1720,20 +1708,21 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 		}
 	}()
 
-	// Get the latest top bid value from Redis
-	topBidValue, err := api.redis.GetTopBidValue(payload.Slot(), payload.ParentHash(), payload.ProposerPubkey())
+	// Get the latest builder bid value from Redis.
+	latestBuilderValue, err := api.redis.GetBuilderLatestValue(payload.Slot(), payload.ParentHash(), payload.ProposerPubkey(), payload.BuilderPubkey().String())
 	if err != nil {
-		log.WithError(err).Error("failed to get top bid value from redis")
+		log.WithError(err).Error("failed to get latest builder bid value from redis")
 	} else {
+		bidHasHigherValue := payload.Value().Cmp(latestBuilderValue) == 1
 		log = log.WithFields(logrus.Fields{
-			"preTopBidValue":       topBidValue.String(),
-			"newBidHasHigherValue": payload.Value().Cmp(topBidValue) == 1,
+			"latestValue":          latestBuilderValue.String(),
+			"newBidHasHigherValue": bidHasHigherValue,
 		})
 
-		// Without cancellations, discard lower or similar value submissions to previous top bid
-		if !isCancellationEnabled && payload.Value().Cmp(topBidValue) < 1 {
-			log.Info("rejecting submission because it is lower or equal to the top bid (redis)")
-			w.WriteHeader(http.StatusOK)
+		// Without cancellations, discard lower or similar value submissions.
+		if !isCancellationEnabled && !bidHasHigherValue {
+			log.Info("rejecting submission because without cancellation and not higher value than previous bid by this builder")
+			api.Respond(w, http.StatusAccepted, struct{ message string }{message: "ignoring submission because lower or equal value than previous bid"})
 			return
 		}
 	}
@@ -1742,9 +1731,31 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	pf.Prechecks = uint64(nextTime.Sub(prevTime).Microseconds())
 	prevTime = nextTime
 
+	// Get the latest top bid value from Redis
+	bidIsTopBid := false
+	topBidValue, err := api.redis.GetTopBidValue(payload.Slot(), payload.ParentHash(), payload.ProposerPubkey())
+	if err != nil {
+		log.WithError(err).Error("failed to get top bid value from redis")
+	} else {
+		bidIsTopBid = payload.Value().Cmp(topBidValue) == 1
+		log = log.WithFields(logrus.Fields{
+			"topBidValue":    topBidValue.String(),
+			"newBidIsTopBid": bidIsTopBid,
+		})
+	}
+
+	// Simulate the block submission and save to db
+	fastTrackValidation := builderEntry.status.IsHighPrio && bidIsTopBid
+	timeBeforeValidation := time.Now().UTC()
+	log = log.WithFields(logrus.Fields{
+		"timestampBeforeValidation": timeBeforeValidation.UTC().UnixMilli(),
+		"fastTrackValidation":       fastTrackValidation,
+	})
+
 	// Construct simulation request.
 	opts := blockSimOptions{
 		isHighPrio: builderEntry.status.IsHighPrio,
+		fastTrack:  fastTrackValidation,
 		log:        log,
 		builder:    builderEntry,
 		req: &common.BuilderBlockValidationRequest{
@@ -1752,10 +1763,6 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 			RegisteredGasLimit:        slotDuty.Entry.Message.GasLimit,
 		},
 	}
-
-	// Simulate the block submission and save to db
-	timeBeforeValidation := time.Now().UTC()
-	log = log.WithField("timestampBeforeValidation", timeBeforeValidation.UTC().UnixMilli())
 
 	// With sufficient collateral, process the block optimistically.
 	if builderEntry.collateral.Cmp(payload.Value()) > 0 &&
