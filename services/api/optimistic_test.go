@@ -276,7 +276,7 @@ func TestProcessOptimisticBlock(t *testing.T) {
 					BuilderSubmitBlockRequest: common.TestBuilderSubmitBlockRequest(
 						secretkey, getTestBidTrace(*pubkey, collateral)),
 				},
-			})
+			}, make(chan *blockSimResult, 1))
 
 			// Check status in db.
 			builder, err := backend.relay.db.GetBlockBuilderByPubkey(pkStr)
