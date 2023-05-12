@@ -220,6 +220,10 @@ func TestSetBlockBuilderStatus(t *testing.T) {
 	err = db.SetBlockBuilderCollateral(pubkey2, builderID, collateralStr)
 	require.NoError(t, err)
 
+	// Builder 3 has a different builder id.
+	err = db.SetBlockBuilderCollateral(pubkey3, "builder0x3", collateralStr)
+	require.NoError(t, err)
+
 	// Before status change.
 	for _, v := range []string{pubkey1, pubkey2, pubkey3, pubkey4} {
 		builder, err := db.GetBlockBuilderByPubkey(v)
@@ -229,16 +233,10 @@ func TestSetBlockBuilderStatus(t *testing.T) {
 		require.False(t, builder.IsBlacklisted)
 	}
 
-	// Update status of builder 1 and 3.
-	err = db.SetBlockBuilderStatus(pubkey1, common.BuilderStatus{
-		IsHighPrio:   true,
-		IsOptimistic: true,
-	}, true)
+	// Update isOptimistic of builder 1 and 3.
+	err = db.SetBlockBuilderIDStatusIsOptimistic(pubkey1, true)
 	require.NoError(t, err)
-	err = db.SetBlockBuilderStatus(pubkey3, common.BuilderStatus{
-		IsHighPrio:   true,
-		IsOptimistic: true,
-	}, true)
+	err = db.SetBlockBuilderIDStatusIsOptimistic(pubkey3, true)
 	require.NoError(t, err)
 
 	// After status change, builders 1, 2, 3 should be modified.
@@ -259,7 +257,7 @@ func TestSetBlockBuilderStatus(t *testing.T) {
 	err = db.SetBlockBuilderStatus(pubkey1, common.BuilderStatus{
 		IsHighPrio:   true,
 		IsOptimistic: false,
-	}, false)
+	})
 	require.NoError(t, err)
 	// Builder 1 should be non-optimistic.
 	builder, err = db.GetBlockBuilderByPubkey(pubkey1)
