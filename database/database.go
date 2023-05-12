@@ -552,7 +552,7 @@ func (s *DatabaseService) InsertBuilderDemotion(submitBlockRequest *common.Build
 		FeeRecipient: submitBlockRequest.ProposerFeeRecipient(),
 
 		BlockHash:           submitBlockRequest.BlockHash(),
-		SubmitBlockSimError: simError.Error(),
+		SimError: simError.Error(),
 	}
 
 	query := `INSERT INTO ` + vars.TableBuilderDemotions + `
