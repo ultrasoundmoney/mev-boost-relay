@@ -97,7 +97,7 @@ func (db MockDB) GetBlockBuilders() ([]*BlockBuilderEntry, error) {
 func (db MockDB) GetBlockBuilderByPubkey(pubkey string) (*BlockBuilderEntry, error) {
 	builder, ok := db.Builders[pubkey]
 	if !ok {
-		return nil, fmt.Errorf("builder with pubkey %v not in Builders map", pubkey)
+		return nil, fmt.Errorf("builder with pubkey %v not in Builders map", pubkey) //nolint:goerr113
 	}
 	return builder, nil
 }
@@ -105,7 +105,7 @@ func (db MockDB) GetBlockBuilderByPubkey(pubkey string) (*BlockBuilderEntry, err
 func (db MockDB) SetBlockBuilderStatus(pubkey string, status common.BuilderStatus, allKeys bool) error {
 	builder, ok := db.Builders[pubkey]
 	if !ok {
-		return fmt.Errorf("builder with pubkey %v not in Builders map", pubkey)
+		return fmt.Errorf("builder with pubkey %v not in Builders map", pubkey) //nolint:goerr113
 	}
 	// All keys updated.
 	if builder.BuilderID != "" && allKeys {
@@ -128,7 +128,7 @@ func (db MockDB) SetBlockBuilderStatus(pubkey string, status common.BuilderStatu
 func (db MockDB) SetBlockBuilderCollateral(pubkey, builderID, collateral string) error {
 	builder, ok := db.Builders[pubkey]
 	if !ok {
-		return fmt.Errorf("builder with pubkey %v not in Builders map", pubkey)
+		return fmt.Errorf("builder with pubkey %v not in Builders map", pubkey) //nolint:goerr113
 	}
 	builder.BuilderID = builderID
 	builder.Collateral = collateral
@@ -153,10 +153,10 @@ func (db MockDB) UpdateBuilderDemotion(trace *common.BidTraceV2, signedBlock *co
 	pubkey := trace.BuilderPubkey.String()
 	_, ok := db.Builders[pubkey]
 	if !ok {
-		return fmt.Errorf("builder with pubkey %v not in Builders map", pubkey)
+		return fmt.Errorf("builder with pubkey %v not in Builders map", pubkey) //nolint:goerr113
 	}
 	if !db.Demotions[pubkey] {
-		return fmt.Errorf("builder with pubkey %v is not demoted", pubkey)
+		return fmt.Errorf("builder with pubkey %v is not demoted", pubkey) //nolint:goerr113
 	}
 	db.Refunds[pubkey] = true
 	return nil
@@ -166,7 +166,7 @@ func (db MockDB) GetBuilderDemotion(trace *common.BidTraceV2) (*BuilderDemotionE
 	pubkey := trace.BuilderPubkey.String()
 	_, ok := db.Builders[pubkey]
 	if !ok {
-		return nil, fmt.Errorf("builder with pubkey %v not in Builders map", pubkey)
+		return nil, fmt.Errorf("builder with pubkey %v not in Builders map", pubkey) //nolint:goerr113
 	}
 	if db.Demotions[pubkey] {
 		return &BuilderDemotionEntry{}, nil

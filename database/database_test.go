@@ -3,6 +3,7 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -33,8 +34,7 @@ const (
 )
 
 var (
-	// runDBTests = os.Getenv("RUN_DB_TESTS") == "1" //|| true
-	runDBTests   = true
+	runDBTests   = os.Getenv("RUN_DB_TESTS") == "1" //|| true
 	feeRecipient = bellatrix.ExecutionAddress{0x02}
 	blockHashStr = "0xa645370cc112c2e8e3cce121416c7dc849e773506d4b6fb9b752ada711355369"
 	testDBDSN    = common.GetEnv("TEST_DB_DSN", "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable")
@@ -59,6 +59,7 @@ func createValidatorRegistration(pubKey string) ValidatorRegistrationEntry {
 }
 
 func getTestKeyPair(t *testing.T) (*phase0.BLSPubKey, *bls.SecretKey) {
+	t.Helper()
 	sk, _, err := bls.GenerateNewKeypair()
 	require.NoError(t, err)
 	blsPubkey, err := bls.PublicKeyFromSecretKey(sk)
@@ -70,9 +71,8 @@ func getTestKeyPair(t *testing.T) (*phase0.BLSPubKey, *bls.SecretKey) {
 }
 
 func insertTestBuilder(t *testing.T, db IDatabaseService) string {
+	t.Helper()
 	pk, sk := getTestKeyPair(t)
-	// pk, err := types.BlsPublicKeyToPublicKey(blsPubkey)
-	// require.NoError(t, err)
 	var testBlockHash phase0.Hash32
 	hashSlice, err := hexutil.Decode(blockHashStr)
 	require.NoError(t, err)

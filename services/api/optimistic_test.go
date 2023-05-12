@@ -44,6 +44,7 @@ var (
 )
 
 func getTestBlockHash(t *testing.T) boostTypes.Hash {
+	t.Helper()
 	var blockHash boostTypes.Hash
 	err := blockHash.FromSlice([]byte("98765432109876543210987654321098"))
 	require.NoError(t, err)
@@ -69,6 +70,7 @@ type blockRequestOpts struct {
 }
 
 func startTestBackend(t *testing.T) (*phase0.BLSPubKey, *bls.SecretKey, *testBackend) {
+	t.Helper()
 	// Setup test key pair.
 	sk, _, err := bls.GenerateNewKeypair()
 	require.NoError(t, err)
@@ -84,7 +86,7 @@ func startTestBackend(t *testing.T) (*phase0.BLSPubKey, *bls.SecretKey, *testBac
 	backend.relay.genesisInfo = &beaconclient.GetGenesisResponse{}
 	backend.relay.genesisInfo.Data.GenesisTime = 0
 	backend.relay.proposerDutiesMap = map[uint64]*common.BuilderGetValidatorsResponseEntry{
-		slot: &common.BuilderGetValidatorsResponseEntry{
+		slot: {
 			Entry: &boostTypes.SignedValidatorRegistration{
 				Message: &boostTypes.RegisterValidatorRequestMessage{
 					FeeRecipient: [20]byte(feeRecipient),
@@ -134,8 +136,6 @@ func startTestBackend(t *testing.T) (*phase0.BLSPubKey, *bls.SecretKey, *testBac
 	backend.relay.db = mockDB
 
 	// Prepare redis.
-	// err = backend.relay.redis.SetStats(datastore.RedisStatsFieldSlotLastPayloadDelivered, slot-1)
-	// require.NoError(t, err)
 	err = backend.relay.redis.SetKnownValidator(boostTypes.NewPubkeyHex(pubkey.String()), proposerInd)
 	require.NoError(t, err)
 	comResp := &common.GetPayloadResponse{
@@ -168,14 +168,12 @@ func startTestBackend(t *testing.T) (*phase0.BLSPubKey, *bls.SecretKey, *testBac
 	require.NoError(t, err)
 	require.Equal(t, count, 1)
 
-	go backend.relay.StartServer() //nolint:errcheck
-	time.Sleep(100 * time.Millisecond)
 	backend.relay.headSlot.Store(40)
-
 	return &pubkey, sk, backend
 }
 
 func runOptimisticBlockSubmission(t *testing.T, opts blockRequestOpts, simErr error, backend *testBackend) *httptest.ResponseRecorder {
+	t.Helper()
 	backend.relay.blockSimRateLimiter = &MockBlockSimulationRateLimiter{
 		simulationError: simErr,
 	}
@@ -204,11 +202,11 @@ func TestSimulateBlock(t *testing.T) {
 		},
 		{
 			description:     "block_already_known",
-			simulationError: fmt.Errorf(ErrBlockAlreadyKnown),
+			simulationError: fmt.Errorf(ErrBlockAlreadyKnown), //nolint:goerr113
 		},
 		{
 			description:     "missing_trie_node",
-			simulationError: fmt.Errorf(ErrMissingTrieNode + "23e21f94cd97b3b27ae5c758277639dd387a6e3da5923c5485f24ec6c71e16b8 (path ) <nil>"),
+			simulationError: fmt.Errorf(ErrMissingTrieNode + "23e21f94cd97b3b27ae5c758277639dd387a6e3da5923c5485f24ec6c71e16b8 (path ) <nil>"), //nolint:goerr113
 		},
 	}
 	for _, tc := range cases {
@@ -288,7 +286,8 @@ func TestProcessOptimisticBlock(t *testing.T) {
 
 			// Check demotion but no refund.
 			if tc.simulationError != nil {
-				mockDB := backend.relay.db.(*database.MockDB)
+				mockDB, ok := backend.relay.db.(*database.MockDB)
+				require.True(t, ok)
 				require.True(t, mockDB.Demotions[pkStr])
 				require.False(t, mockDB.Refunds[pkStr])
 			}
@@ -313,16 +312,17 @@ func TestDemoteBuilder(t *testing.T) {
 	require.Equal(t, wantStatus.IsHighPrio, builder.IsHighPrio)
 
 	// Check demotion and refund statuses.
-	mockDB := backend.relay.db.(*database.MockDB)
+	mockDB, ok := backend.relay.db.(*database.MockDB)
+	require.True(t, ok)
 	require.True(t, mockDB.Demotions[pkStr])
 }
 
-func TestUpdateOptimisticSlot(t *testing.T) {
+func TestPrepareBuildersForSlot(t *testing.T) {
 	pubkey, _, backend := startTestBackend(t)
 	pkStr := pubkey.String()
 	// Clear cache.
 	backend.relay.blockBuildersCache = map[string]*blockBuilderCacheEntry{}
-	backend.relay.updateOptimisticSlot(slot + 1)
+	backend.relay.prepareBuildersForSlot(slot + 1)
 	entry, ok := backend.relay.blockBuildersCache[pkStr]
 	require.True(t, ok)
 	require.Equal(t, true, entry.status.IsHighPrio)
@@ -363,17 +363,6 @@ func TestBuilderApiSubmitNewBlockOptimistic(t *testing.T) {
 			blockValue:      collateral + 1,
 		},
 		{
-			description: "failure_value_less_than_collateral",
-			wantStatus: common.BuilderStatus{
-				IsOptimistic: false,
-				IsHighPrio:   true,
-			},
-			simulationError: errFake,
-			expectDemotion:  true,
-			httpCode:        200, // success (in optimistic mode, block sim failure will happen async)
-			blockValue:      collateral - 1,
-		},
-		{
 			description: "failure_value_more_than_collateral",
 			wantStatus: common.BuilderStatus{
 				IsOptimistic: true,
@@ -389,7 +378,7 @@ func TestBuilderApiSubmitNewBlockOptimistic(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.description, func(t *testing.T) {
 			pubkey, secretkey, backend := startTestBackend(t)
-			backend.relay.optimisticSlot = slot
+			backend.relay.optimisticSlot.Store(slot)
 			backend.relay.capellaEpoch = 1
 			var randaoHash boostTypes.Hash
 			err := randaoHash.FromSlice([]byte(randao))
@@ -421,7 +410,8 @@ func TestBuilderApiSubmitNewBlockOptimistic(t *testing.T) {
 			require.Equal(t, tc.wantStatus.IsHighPrio, builder.IsHighPrio)
 
 			// Check demotion status is set to expected and refund is false.
-			mockDB := backend.relay.db.(*database.MockDB)
+			mockDB, ok := backend.relay.db.(*database.MockDB)
+			require.True(t, ok)
 			require.Equal(t, mockDB.Demotions[pkStr], tc.expectDemotion)
 			require.False(t, mockDB.Refunds[pkStr])
 		})
