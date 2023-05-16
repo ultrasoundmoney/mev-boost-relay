@@ -541,6 +541,14 @@ func (s *DatabaseService) InsertBuilderDemotion(submitBlockRequest *common.Build
 	if err != nil {
 		return err
 	}
+
+	var simErrorStr string
+	if simError != nil {
+		simErrorStr = simError.Error()
+	} else {
+		simErrorStr = ""
+	}
+
 	builderDemotionEntry := BuilderDemotionEntry{
 		SubmitBlockRequest: NewNullString(string(_submitBlockRequest)),
 
@@ -554,7 +562,7 @@ func (s *DatabaseService) InsertBuilderDemotion(submitBlockRequest *common.Build
 		FeeRecipient: submitBlockRequest.ProposerFeeRecipient(),
 
 		BlockHash: submitBlockRequest.BlockHash(),
-		SimError:  simError.Error(),
+		SimError:  simErrorStr,
 	}
 
 	query := `INSERT INTO ` + vars.TableBuilderDemotions + `
