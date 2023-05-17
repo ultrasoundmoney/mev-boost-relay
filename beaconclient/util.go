@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 )
 
 var (
@@ -18,7 +19,7 @@ var (
 	StateIDJustified = "justified"
 )
 
-func fetchBeacon(method, url string, payload, dst any) (code int, err error) {
+func fetchBeacon(method, url string, payload, dst any, timeout *time.Duration) (code int, err error) {
 	var req *http.Request
 
 	if payload == nil {
@@ -39,7 +40,13 @@ func fetchBeacon(method, url string, payload, dst any) (code int, err error) {
 	}
 	req.Header.Set("accept", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	client := http.DefaultClient
+	if timeout != nil && timeout.Seconds() > 0 {
+		client = &http.Client{ //nolint:exhaustruct
+			Timeout: *timeout,
+		}
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return 0, fmt.Errorf("client refused for %s: %w", url, err)
 	}
