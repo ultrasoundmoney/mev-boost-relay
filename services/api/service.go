@@ -145,13 +145,6 @@ type blockSimOptions struct {
 	req        *common.BuilderBlockValidationRequest
 }
 
-type blockSimResult struct {
-	wasSimulated         bool
-	optimisticSubmission bool
-	requestErr           error
-	validationErr        error
-}
-
 type blockBuilderCacheEntry struct {
 	status     common.BuilderStatus
 	collateral *big.Int
@@ -594,7 +587,7 @@ func (api *RelayAPI) demoteBuilder(pubkey string, req *common.BuilderSubmitBlock
 
 // processOptimisticBlock is called on a new goroutine when a optimistic block
 // needs to be simulated.
-func (api *RelayAPI) processOptimisticBlock(opts blockSimOptions, simResultC chan *blockSimResult) {
+func (api *RelayAPI) processOptimisticBlock(opts blockSimOptions) {
 	api.optimisticBlocksInFlight.Add(1)
 	defer func() { api.optimisticBlocksInFlight.Sub(1) }()
 	api.optimisticBlocksWG.Add(1)
@@ -610,8 +603,6 @@ func (api *RelayAPI) processOptimisticBlock(opts blockSimOptions, simResultC cha
 		"optBlocksInFlight": api.optimisticBlocksInFlight,
 	}).Infof("simulating optimistic block with hash: %v", opts.req.BuilderSubmitBlockRequest.BlockHash())
 	reqErr, simErr := api.simulateBlock(ctx, opts)
-	simResultC <- &blockSimResult{reqErr == nil, true, reqErr, simErr}
-
 	if reqErr != nil || simErr != nil {
 		// Mark builder as non-optimistic.
 		opts.builder.status.IsOptimistic = false
@@ -1753,29 +1744,20 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 		return
 	}
 
+	var wasSimulated, optimisticSubmission bool
+	var requestErr, validationErr error
 	var eligibleAt time.Time
-	// Used to communicate simulation result to the deferred function
-	simResultC := make(chan *blockSimResult, 1)
 
 	// Save the builder submission to the database whenever this function ends
 	defer func() {
 		savePayloadToDatabase := !api.ffDisablePayloadDBStorage
-
-		var simResult *blockSimResult
-		select {
-		case simResult = <-simResultC:
-		case <-time.After(10 * time.Second):
-			log.Warn("timed out waiting for simulation result")
-			simResult = &blockSimResult{false, false, nil, nil}
-		}
-
-		submissionEntry, err := api.db.SaveBuilderBlockSubmission(payload, simResult.requestErr, simResult.validationErr, receivedAt, eligibleAt, simResult.wasSimulated, savePayloadToDatabase, pf, simResult.optimisticSubmission)
+		submissionEntry, err := api.db.SaveBuilderBlockSubmission(payload, requestErr, validationErr, receivedAt, eligibleAt, wasSimulated, savePayloadToDatabase, pf, optimisticSubmission)
 		if err != nil {
 			log.WithError(err).WithField("payload", payload).Error("saving builder block submission to database failed")
 			return
 		}
 
-		err = api.db.UpsertBlockBuilderEntryAfterSubmission(submissionEntry, simResult.validationErr != nil)
+		err = api.db.UpsertBlockBuilderEntryAfterSubmission(submissionEntry, validationErr != nil)
 		if err != nil {
 			log.WithError(err).Error("failed to upsert block-builder-entry")
 		}
@@ -1795,7 +1777,6 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 		// Without cancellations, discard bids below floor value
 		if !isCancellationEnabled && !isBidAboveFloor {
 			log.Info("ignoring submission without cancellation and below floor bid value")
-			simResultC <- &blockSimResult{false, false, nil, nil}
 			api.RespondMsg(w, http.StatusAccepted, "ignoring submission without cancellation and below floor bid value")
 			return
 		}
@@ -1846,11 +1827,10 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	if builderEntry.status.IsOptimistic &&
 		builderEntry.collateral.Cmp(payload.Value()) >= 0 &&
 		payload.Slot() == api.optimisticSlot.Load() {
-		go api.processOptimisticBlock(opts, simResultC)
+		go api.processOptimisticBlock(opts)
 	} else {
 		// Simulate block (synchronously).
-		requestErr, validationErr := api.simulateBlock(req.Context(), opts) // success/error logging happens inside
-		simResultC <- &blockSimResult{requestErr == nil, false, requestErr, validationErr}
+		requestErr, validationErr = api.simulateBlock(req.Context(), opts) // success/error logging happens inside
 		validationDurationMs := time.Since(timeBeforeValidation).Milliseconds()
 		log = log.WithFields(logrus.Fields{
 			"timestampAfterValidation": time.Now().UTC().UnixMilli(),
@@ -1864,6 +1844,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 			}
 			return
 		} else {
+			wasSimulated = true
 			if validationErr != nil {
 				api.RespondError(w, http.StatusBadRequest, validationErr.Error())
 				return
