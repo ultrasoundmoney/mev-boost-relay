@@ -10,6 +10,8 @@ package housekeeper
 import (
 	"errors"
 	"fmt"
+	"net/http"
+	_ "net/http/pprof"
 	"sort"
 	"strings"
 	"time"
@@ -19,6 +21,7 @@ import (
 	"github.com/flashbots/mev-boost-relay/common"
 	"github.com/flashbots/mev-boost-relay/database"
 	"github.com/flashbots/mev-boost-relay/datastore"
+	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
 	uberatomic "go.uber.org/atomic"
 )
@@ -28,6 +31,9 @@ type HousekeeperOpts struct {
 	Redis        *datastore.RedisCache
 	DB           database.IDatabaseService
 	BeaconClient beaconclient.IMultiBeaconClient
+
+	PprofAPI           bool
+	PprofListenAddress string
 }
 
 type Housekeeper struct {
@@ -37,6 +43,9 @@ type Housekeeper struct {
 	redis        *datastore.RedisCache
 	db           database.IDatabaseService
 	beaconClient beaconclient.IMultiBeaconClient
+
+	pprofAPI           bool
+	pprofListenAddress string
 
 	isStarted                uberatomic.Bool
 	isUpdatingProposerDuties uberatomic.Bool
@@ -59,6 +68,8 @@ func NewHousekeeper(opts *HousekeeperOpts) *Housekeeper {
 		redis:                 opts.Redis,
 		db:                    opts.DB,
 		beaconClient:          opts.BeaconClient,
+		pprofAPI:              opts.PprofAPI,
+		pprofListenAddress:    opts.PprofListenAddress,
 		proposersAlreadySaved: make(map[uint64]string),
 	}
 
@@ -78,6 +89,11 @@ func (hk *Housekeeper) Start() (err error) {
 		return err
 	}
 
+	// Start pprof API, if requested
+	if hk.pprofAPI {
+		go hk.startPprofAPI()
+	}
+
 	// Start initial tasks
 	go hk.updateValidatorRegistrationsInRedis()
 
@@ -90,6 +106,20 @@ func (hk *Housekeeper) Start() (err error) {
 	for {
 		headEvent := <-c
 		hk.processNewSlot(headEvent.Slot)
+	}
+}
+
+func (hk *Housekeeper) startPprofAPI() {
+	r := mux.NewRouter()
+	hk.log.Infof("Starting pprof API at %s", hk.pprofListenAddress)
+	r.PathPrefix("/debug/pprof/").Handler(http.DefaultServeMux)
+	srv := http.Server{ //nolint:gosec
+		Addr:    hk.pprofListenAddress,
+		Handler: r,
+	}
+	err := srv.ListenAndServe()
+	if err != nil {
+		hk.log.WithError(err).Error("failed to start pprof API")
 	}
 }
 
@@ -130,6 +160,17 @@ func (hk *Housekeeper) processNewSlot(headSlot uint64) {
 		"epoch":              currentEpoch,
 		"slotStartNextEpoch": (currentEpoch + 1) * common.SlotsPerEpoch,
 	}).Infof("updated headSlot to %d", headSlot)
+}
+
+func (hk *Housekeeper) saveKnownValidators(indexPkMap map[uint64]types.PubkeyHex) {
+	err := hk.redis.SetMultiKnownValidator(indexPkMap)
+	if err != nil {
+		hk.log.WithError(err).Error("failed to set known validators in Redis")
+	} else {
+		for proposerIndex, publickeyHex := range indexPkMap {
+			hk.proposersAlreadySaved[proposerIndex] = publickeyHex.String()
+		}
+	}
 }
 
 // updateKnownValidators queries the full list of known validators from the beacon node
@@ -207,16 +248,13 @@ func (hk *Housekeeper) updateKnownValidators() {
 	log.Debug("Writing to Redis...")
 	timeStartWriting := time.Now()
 
-	// This process can take very long, that's why it prints a log line every 10k validators
-	printCounter := len(hk.proposersAlreadySaved) == 0 // only do this on service startup
-
+	// This writes a large amount of validators to redis (~600k), which can take a while
 	i := 0
 	newValidators := 0
+	bufferSize := 10000
+	indexPkMap := make(map[uint64]types.PubkeyHex)
 	for _, validator := range validators {
 		i++
-		if printCounter && i%10000 == 0 {
-			log.Debugf("writing to redis: %d / %d", i, numValidators)
-		}
 
 		// avoid resaving if index->pubkey mapping is the same
 		prevPubkeyForIndex := hk.proposersAlreadySaved[validator.Index]
@@ -224,14 +262,19 @@ func (hk *Housekeeper) updateKnownValidators() {
 			continue
 		}
 
-		err := hk.redis.SetKnownValidator(types.PubkeyHex(validator.Validator.Pubkey), validator.Index)
-		if err != nil {
-			log.WithError(err).WithField("pubkey", validator.Validator.Pubkey).Error("failed to set known validator in Redis")
-		} else {
-			hk.proposersAlreadySaved[validator.Index] = validator.Validator.Pubkey
-			newValidators++
+		indexPkMap[validator.Index] = types.PubkeyHex(validator.Validator.Pubkey)
+
+		if i%bufferSize == 0 {
+			hk.saveKnownValidators(indexPkMap)
+			newValidators += bufferSize
+			indexPkMap = make(map[uint64]types.PubkeyHex)
+			log.Debugf("wrote known validators to redis: %d / %d", i, numValidators)
 		}
 	}
+
+	hk.saveKnownValidators(indexPkMap)
+	newValidators += len(indexPkMap)
+	log.Debugf("wrote known validators to redis: %d / %d", i, numValidators)
 
 	log.WithFields(logrus.Fields{
 		"durationRedisWrite": time.Since(timeStartWriting).Seconds(),

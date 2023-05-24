@@ -150,6 +150,13 @@ type blockBuilderCacheEntry struct {
 	collateral *big.Int
 }
 
+type blockSimResult struct {
+	wasSimulated         bool
+	optimisticSubmission bool
+	requestErr           error
+	validationErr        error
+}
+
 // RelayAPI represents a single Relay instance
 type RelayAPI struct {
 	opts RelayAPIOpts
@@ -193,6 +200,7 @@ type RelayAPI struct {
 	ffLogInvalidSignaturePayload bool // log payload if getPayload signature validation fails
 	ffEnableCancellations        bool // whether to enable block builder cancellations
 	ffRegValContinueOnInvalidSig bool // whether to continue processing further validators if one fails
+	ffIgnorableValidationErrors  bool // whether to enable ignorable validation errors
 
 	payloadAttributes     map[string]payloadAttributesHelper // key:parentBlockHash
 	payloadAttributesLock sync.RWMutex
@@ -301,6 +309,11 @@ func NewRelayAPI(opts RelayAPIOpts) (api *RelayAPI, err error) {
 	if os.Getenv("REGISTER_VALIDATOR_CONTINUE_ON_INVALID_SIG") == "1" {
 		api.log.Warn("env: REGISTER_VALIDATOR_CONTINUE_ON_INVALID_SIG - validator registration will continue processing even if one validator has an invalid signature")
 		api.ffRegValContinueOnInvalidSig = true
+	}
+
+	if os.Getenv("ENABLE_IGNORABLE_VALIDATION_ERRORS") == "1" {
+		api.log.Warn("env: ENABLE_IGNORABLE_VALIDATION_ERRORS - some validation errors will be ignored")
+		api.ffIgnorableValidationErrors = true
 	}
 
 	return api, nil
@@ -542,14 +555,16 @@ func (api *RelayAPI) simulateBlock(ctx context.Context, opts blockSimOptions) (r
 		"numWaiting": api.blockSimRateLimiter.CurrentCounter(),
 	})
 	if validationErr != nil {
-		// TODO(mikeneuder): consider the negation logic here if it improves readability.
-		ignoreError := validationErr.Error() == ErrBlockAlreadyKnown || validationErr.Error() == ErrBlockRequiresReorg || strings.Contains(validationErr.Error(), ErrMissingTrieNode)
-		if !ignoreError {
-			log.WithError(validationErr).Warn("block validation failed")
-			return nil, validationErr
+		if api.ffIgnorableValidationErrors {
+			// Operators chooses to ignore certain validation errors
+			ignoreError := validationErr.Error() == ErrBlockAlreadyKnown || validationErr.Error() == ErrBlockRequiresReorg || strings.Contains(validationErr.Error(), ErrMissingTrieNode)
+			if ignoreError {
+				log.WithError(validationErr).Warn("block validation failed with ignorable error")
+				return nil, nil
+			}
 		}
-		log.WithError(validationErr).Warn("block validation failed with ignorable error")
-		return nil, nil
+		log.WithError(validationErr).Warn("block validation failed")
+		return nil, validationErr
 	}
 	if requestErr != nil {
 		log.WithError(requestErr).Warn("block validation failed: request error")
@@ -587,7 +602,7 @@ func (api *RelayAPI) demoteBuilder(pubkey string, req *common.BuilderSubmitBlock
 
 // processOptimisticBlock is called on a new goroutine when a optimistic block
 // needs to be simulated.
-func (api *RelayAPI) processOptimisticBlock(opts blockSimOptions) {
+func (api *RelayAPI) processOptimisticBlock(opts blockSimOptions, simResultC chan *blockSimResult) {
 	api.optimisticBlocksInFlight.Add(1)
 	defer func() { api.optimisticBlocksInFlight.Sub(1) }()
 	api.optimisticBlocksWG.Add(1)
@@ -603,6 +618,7 @@ func (api *RelayAPI) processOptimisticBlock(opts blockSimOptions) {
 		"optBlocksInFlight": api.optimisticBlocksInFlight,
 	}).Infof("simulating optimistic block with hash: %v", opts.req.BuilderSubmitBlockRequest.BlockHash())
 	reqErr, simErr := api.simulateBlock(ctx, opts)
+	simResultC <- &blockSimResult{reqErr == nil, true, reqErr, simErr}
 	if reqErr != nil || simErr != nil {
 		// Mark builder as non-optimistic.
 		opts.builder.status.IsOptimistic = false
@@ -1744,20 +1760,28 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 		return
 	}
 
-	var wasSimulated, optimisticSubmission bool
-	var requestErr, validationErr error
 	var eligibleAt time.Time
+	// Used to communicate simulation result to the deferred function
+	simResultC := make(chan *blockSimResult, 1)
 
 	// Save the builder submission to the database whenever this function ends
 	defer func() {
 		savePayloadToDatabase := !api.ffDisablePayloadDBStorage
-		submissionEntry, err := api.db.SaveBuilderBlockSubmission(payload, requestErr, validationErr, receivedAt, eligibleAt, wasSimulated, savePayloadToDatabase, pf, optimisticSubmission)
+		var simResult *blockSimResult
+		select {
+		case simResult = <-simResultC:
+		case <-time.After(10 * time.Second):
+			log.Warn("timed out waiting for simulation result")
+			simResult = &blockSimResult{false, false, nil, nil}
+		}
+
+		submissionEntry, err := api.db.SaveBuilderBlockSubmission(payload, simResult.requestErr, simResult.validationErr, receivedAt, eligibleAt, simResult.wasSimulated, savePayloadToDatabase, pf, simResult.optimisticSubmission)
 		if err != nil {
 			log.WithError(err).WithField("payload", payload).Error("saving builder block submission to database failed")
 			return
 		}
 
-		err = api.db.UpsertBlockBuilderEntryAfterSubmission(submissionEntry, validationErr != nil)
+		err = api.db.UpsertBlockBuilderEntryAfterSubmission(submissionEntry, simResult.validationErr != nil)
 		if err != nil {
 			log.WithError(err).Error("failed to upsert block-builder-entry")
 		}
@@ -1776,6 +1800,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 
 		// Without cancellations, discard bids below floor value
 		if !isCancellationEnabled && !isBidAboveFloor {
+			simResultC <- &blockSimResult{false, false, nil, nil}
 			log.Info("ignoring submission without cancellation and below floor bid value")
 			api.RespondMsg(w, http.StatusAccepted, "ignoring submission without cancellation and below floor bid value")
 			return
@@ -1827,10 +1852,11 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	if builderEntry.status.IsOptimistic &&
 		builderEntry.collateral.Cmp(payload.Value()) >= 0 &&
 		payload.Slot() == api.optimisticSlot.Load() {
-		go api.processOptimisticBlock(opts)
+		go api.processOptimisticBlock(opts, simResultC)
 	} else {
 		// Simulate block (synchronously).
-		requestErr, validationErr = api.simulateBlock(req.Context(), opts) // success/error logging happens inside
+		requestErr, validationErr := api.simulateBlock(req.Context(), opts) // success/error logging happens inside
+		simResultC <- &blockSimResult{requestErr == nil, false, requestErr, validationErr}
 		validationDurationMs := time.Since(timeBeforeValidation).Milliseconds()
 		log = log.WithFields(logrus.Fields{
 			"timestampAfterValidation": time.Now().UTC().UnixMilli(),
@@ -1844,7 +1870,6 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 			}
 			return
 		} else {
-			wasSimulated = true
 			if validationErr != nil {
 				api.RespondError(w, http.StatusBadRequest, validationErr.Error())
 				return
@@ -1947,7 +1972,6 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	pf.RedisUpdate = uint64(nextTime.Sub(prevTime).Microseconds())
 	pf.Total = uint64(nextTime.Sub(receivedAt).Microseconds())
 
-	// Respond with OK (TODO: proper response data type https://flashbots.notion.site/Relay-API-Spec-5fb0819366954962bc02e81cb33840f5#fa719683d4ae4a57bc3bf60e138b0dc6)
 	// All done
 	log.Info("received block from builder")
 	w.WriteHeader(http.StatusOK)
