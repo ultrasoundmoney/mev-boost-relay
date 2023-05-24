@@ -1807,10 +1807,6 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 		}
 	}
 
-	nextTime = time.Now().UTC()
-	pf.Prechecks = uint64(nextTime.Sub(prevTime).Microseconds())
-	prevTime = nextTime
-
 	// Get the latest top bid value from Redis
 	bidIsTopBid := false
 	topBidValue, err := api.redis.GetTopBidValue(payload.Slot(), payload.ParentHash(), payload.ProposerPubkey())
