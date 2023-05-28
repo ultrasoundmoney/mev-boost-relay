@@ -2055,8 +2055,6 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 		return
 	}
 
-	// fmt.Printf("*** %+v \n", header)
-
 	nextTime = time.Now().UTC()
 	pf.Decode = uint64(nextTime.Sub(prevTime).Microseconds())
 	prevTime = nextTime
@@ -2195,7 +2193,6 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 
 	nextTime = time.Now().UTC()
 	pf.Prechecks = uint64(nextTime.Sub(prevTime).Microseconds())
-	prevTime = nextTime
 
 	// Join the header bytes with the remaining bytes.
 	go api.optimisticV2SlowPath(io.MultiReader(&buf, r), v2SlowPathOpts{
@@ -2230,9 +2227,11 @@ func (api *RelayAPI) optimisticV2SlowPath(r io.Reader, v2Opts v2SlowPathOpts) {
 
 	eph := v2Opts.header.ExecutionPayloadHeader
 	payload := &common.BuilderSubmitBlockRequest{
+		Bellatrix: nil,
 		Capella: &builderCapella.SubmitBlockRequest{
 			Message: v2Opts.header.Message,
-			ExecutionPayload: &capellaspec.ExecutionPayload{
+			// Transactions and Withdrawals are intentionally omitted.
+			ExecutionPayload: &capellaspec.ExecutionPayload{ //nolint:exhaustruct
 				ParentHash:    eph.ParentHash,
 				FeeRecipient:  eph.FeeRecipient,
 				StateRoot:     eph.StateRoot,

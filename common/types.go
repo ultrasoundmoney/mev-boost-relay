@@ -969,7 +969,6 @@ func (s *SubmitBlockRequest) MarshalSSZTo(buf []byte) (dst []byte, err error) {
 
 	// Offset (4) 'Withdrawals'
 	dst = ssz.WriteOffset(dst, offset)
-	offset += len(s.Withdrawals) * 44
 
 	// Field (1) 'ExecutionPayloadHeader'
 	if dst, err = s.ExecutionPayloadHeader.MarshalSSZTo(dst); err != nil {
@@ -1006,8 +1005,7 @@ func (s *SubmitBlockRequest) MarshalSSZTo(buf []byte) (dst []byte, err error) {
 			return
 		}
 	}
-
-	return
+	return dst, nil
 }
 
 // SizeSSZ returns the ssz encoded size in bytes for the SubmitBlockRequest object

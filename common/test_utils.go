@@ -83,7 +83,7 @@ func TestBuilderSubmitBlockRequestV2(sk *bls.SecretKey, bid *BidTraceV2) *Submit
 	check(err)
 	return &SubmitBlockRequest{
 		Message: &bid.BidTrace,
-		ExecutionPayloadHeader: &consensuscapella.ExecutionPayloadHeader{
+		ExecutionPayloadHeader: &consensuscapella.ExecutionPayloadHeader{ //nolint:exhaustruct
 			TransactionsRoot: [32]byte{},
 			Timestamp:        bid.Slot * 12, // 12 seconds per slot.
 			PrevRandao:       _HexToHash("01234567890123456789012345678901"),
