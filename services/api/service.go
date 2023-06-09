@@ -86,6 +86,7 @@ var (
 
 	// various timings
 	timeoutGetPayloadRetryMs  = cli.GetEnvInt("GETPAYLOAD_RETRY_TIMEOUT_MS", 100)
+	getHeaderRequestCutoffMs  = cli.GetEnvInt("GETHEADER_REQUEST_CUTOFF_MS", 3000)
 	getPayloadRequestCutoffMs = cli.GetEnvInt("GETPAYLOAD_REQUEST_CUTOFF_MS", 4000)
 	getPayloadResponseDelayMs = cli.GetEnvInt("GETPAYLOAD_RESPONSE_DELAY_MS", 1000)
 
@@ -95,6 +96,9 @@ var (
 	apiWriteTimeoutMs      = cli.GetEnvInt("API_TIMEOUT_WRITE_MS", 10000)
 	apiIdleTimeoutMs       = cli.GetEnvInt("API_TIMEOUT_IDLE_MS", 3000)
 	apiMaxHeaderBytes      = cli.GetEnvInt("API_MAX_HEADER_BYTES", 60000)
+
+	// maximum payload bytes for a block submission to be fast-tracked (large payloads slow down other fast-tracked requests!)
+	fastTrackPayloadSizeLimit = cli.GetEnvInt("FAST_TRACK_PAYLOAD_SIZE_LIMIT", 230_000)
 
 	// user-agents which shouldn't receive bids
 	apiNoHeaderUserAgents = common.GetEnvStrSlice("NO_HEADER_USERAGENTS", []string{
@@ -1094,9 +1098,9 @@ func (api *RelayAPI) handleGetHeader(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// Only allow requests for the current slot until a certain cutoff time
-	if getPayloadRequestCutoffMs > 0 && msIntoSlot > 0 && msIntoSlot > int64(getPayloadRequestCutoffMs) {
+	if getHeaderRequestCutoffMs > 0 && msIntoSlot > 0 && msIntoSlot > int64(getHeaderRequestCutoffMs) {
 		log.Info("getHeader sent too late")
-		api.RespondError(w, http.StatusBadRequest, fmt.Sprintf("sent too late - %d ms into slot", msIntoSlot))
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
@@ -1214,7 +1218,7 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 	}
 
 	// Add proposer pubkey to logs
-	log = log.WithField("proposerPubkey", proposerPubkey)
+	log = log.WithField("proposerPubkey", proposerPubkey.String())
 
 	// Create a BLS pubkey from the hex pubkey
 	pk, err := boostTypes.HexToPubkey(proposerPubkey.String())
@@ -1252,12 +1256,22 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 
 		// Try again
 		getPayloadResp, err = api.datastore.GetGetPayloadResponse(payload.Slot(), proposerPubkey.String(), payload.BlockHash())
-		if err != nil {
-			log.WithError(err).Error("failed getting execution payload (2/2) - due to error")
-			api.RespondError(w, http.StatusBadRequest, err.Error())
-			return
-		} else if getPayloadResp == nil {
-			log.Warn("failed getting execution payload (2/2)")
+		if err != nil || getPayloadResp == nil {
+			// Still not found! Error out now.
+			if errors.Is(err, datastore.ErrExecutionPayloadNotFound) {
+				// Couldn't find the execution payload, maybe it never was submitted to our relay! Check that now
+				_, err := api.db.GetBlockSubmissionEntry(payload.Slot(), proposerPubkey.String(), payload.BlockHash())
+				if errors.Is(err, sql.ErrNoRows) {
+					log.Warn("failed getting execution payload (2/2) - payload not found, block was never submitted to this relay")
+					api.RespondError(w, http.StatusBadRequest, "no execution payload for this request - block was never seen by this relay")
+				} else if err != nil {
+					log.WithError(err).Error("failed getting execution payload (2/2) - payload not found, and error on checking bids")
+				} else {
+					log.Error("failed getting execution payload (2/2) - payload not found, but found bid in database")
+				}
+			} else { // some other error
+				log.WithError(err).Error("failed getting execution payload (2/2) - error")
+			}
 			api.RespondError(w, http.StatusBadRequest, "no execution payload for this request")
 			return
 		}
@@ -1352,6 +1366,7 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 		bidTrace, err := api.redis.GetBidTrace(payload.Slot(), proposerPubkey.String(), payload.BlockHash())
 		if err != nil {
 			log.WithError(err).Error("failed to get bidTrace for delivered payload from redis")
+			bidTrace = &common.BidTraceV2{} //nolint:exhaustruct
 		}
 
 		err = api.db.SaveDeliveredPayload(bidTrace, payload, decodeTime, msNeededForPublishing)
@@ -1527,8 +1542,8 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	pf.Decode = uint64(nextTime.Sub(prevTime).Microseconds())
 	prevTime = nextTime
 
+	isLargeRequest := len(requestPayloadBytes) > fastTrackPayloadSizeLimit
 	log = log.WithFields(logrus.Fields{
-		"payloadBytes":           len(requestPayloadBytes),
 		"timestampAfterDecoding": time.Now().UTC().UnixMilli(),
 		"slot":                   payload.Slot(),
 		"builderPubkey":          payload.BuilderPubkey().String(),
@@ -1537,6 +1552,8 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 		"parentHash":             payload.ParentHash(),
 		"value":                  payload.Value().String(),
 		"numTx":                  payload.NumTx(),
+		"payloadBytes":           len(requestPayloadBytes),
+		"isLargeRequest":         isLargeRequest,
 	})
 
 	if payload.Message() == nil || !payload.HasExecutionPayload() {
@@ -1771,7 +1788,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	}
 
 	// Simulate the block submission and save to db
-	fastTrackValidation := builderEntry.status.IsHighPrio && bidIsTopBid
+	fastTrackValidation := builderEntry.status.IsHighPrio && bidIsTopBid && !isLargeRequest
 	timeBeforeValidation := time.Now().UTC()
 
 	log = log.WithFields(logrus.Fields{

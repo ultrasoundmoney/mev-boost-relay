@@ -6,7 +6,7 @@ require (
 	github.com/NYTimes/gziphandler v1.1.1
 	github.com/alicebob/miniredis/v2 v2.30.3
 	github.com/attestantio/go-builder-client v0.3.0
-	github.com/attestantio/go-eth2-client v0.16.3
+	github.com/attestantio/go-eth2-client v0.16.4
 	github.com/bradfitz/gomemcache v0.0.0-20230124162541-5f7a7d875746
 	github.com/btcsuite/btcd/btcutil v1.1.2
 	github.com/buger/jsonparser v1.1.1
@@ -20,7 +20,7 @@ require (
 	github.com/lib/pq v1.10.8
 	github.com/pkg/errors v0.9.1
 	github.com/r3labs/sse/v2 v2.8.1
-	github.com/sirupsen/logrus v1.9.2
+	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/cobra v1.6.1
 	github.com/stretchr/testify v1.8.4
 	github.com/tdewolff/minify v2.3.6+incompatible
