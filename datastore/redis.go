@@ -499,19 +499,12 @@ func (r *RedisCache) SaveBidAndUpdateTopBid(ctx context.Context, tx redis.Pipeli
 	//
 	// Time to save things in Redis
 	//
-<<<<<<< HEAD
 	// 1. Save the execution payload (only if it was passed in).
 	if getPayloadResponse != nil {
 		err = r.SaveExecutionPayloadCapella(ctx, tx, payload.Slot(), payload.ProposerPubkey(), payload.BlockHash(), getPayloadResponse.Capella.Capella)
 		if err != nil {
 			return state, err
 		}
-=======
-	// 1. Save the execution payload
-	err = r.SaveExecutionPayloadCapella(ctx, tx, payload.Slot(), payload.ProposerPubkey(), payload.BlockHash(), getPayloadResponse.Capella.Capella)
-	if err != nil {
-		return state, err
->>>>>>> 4d38f3a794a151dbb9af60b123865e4a532743bd
 	}
 
 	// Record time needed to save payload
