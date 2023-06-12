@@ -526,10 +526,12 @@ func (r *RedisCache) SaveBidAndUpdateTopBid(payload *common.BuilderSubmitBlockRe
 	//
 	// Time to save things in Redis
 	//
-	// 1. Save the execution payload
-	err = r.SaveExecutionPayload(payload.Slot(), payload.ProposerPubkey(), payload.BlockHash(), getPayloadResponse)
-	if err != nil {
-		return state, err
+	// 1. Save the execution payload (only if it was passed in).
+	if getPayloadResponse != nil {
+		err = r.SaveExecutionPayloadCapella(ctx, tx, payload.Slot(), payload.ProposerPubkey(), payload.BlockHash(), getPayloadResponse.Capella.Capella)
+		if err != nil {
+			return state, err
+		}
 	}
 
 	// 2. Save latest bid for this builder

@@ -2204,7 +2204,7 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 		log.Warn("could not find slot duty")
 		api.RespondError(w, http.StatusBadRequest, "could not find slot duty")
 		return
-	} else if slotDuty.Entry.Message.FeeRecipient.String() != bid.ProposerFeeRecipient.String() {
+	} else if !strings.EqualFold(slotDuty.Entry.Message.FeeRecipient.String(), bid.ProposerFeeRecipient.String()) {
 		log.Info("fee recipient does not match")
 		api.RespondError(w, http.StatusBadRequest, "fee recipient does not match")
 		return
@@ -2248,6 +2248,43 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 	pf.Prechecks = uint64(nextTime.Sub(prevTime).Microseconds())
 	prevTime = nextTime
 
+	// Prepare the response data
+	getHeaderResponse, err := common.BuildGetHeaderResponseHeaderOnly(header.Message.Value, eph, api.blsSk, api.publicKey, api.opts.EthNetDetails.DomainBuilder)
+	if err != nil {
+		log.WithError(err).Error("could not sign builder bid")
+		api.RespondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	payload := new(common.BuilderSubmitBlockRequest)
+
+	bidTrace := &common.BidTraceV2{
+		BidTrace:    *header.Message,
+		BlockNumber: header.ExecutionPayloadHeader.BlockNumber,
+	}
+
+	//
+	// Save to Redis
+	//
+	updateBidResult, err := api.redis.SaveBidAndUpdateTopBid(context.Background(), tx, bidTrace, payload, nil, getHeaderResponse, receivedAt, isCancellationEnabled, nil)
+	if err != nil {
+		log.WithError(err).Error("could not save bid and update top bids")
+		api.RespondError(w, http.StatusInternalServerError, "failed saving and updating bid")
+		return
+	}
+
+	// Add fields to logs
+	log = log.WithFields(logrus.Fields{
+		"timestampAfterBidUpdate":    time.Now().UTC().UnixMilli(),
+		"wasBidSavedInRedis":         updateBidResult.WasBidSaved,
+		"wasTopBidUpdated":           updateBidResult.WasTopBidUpdated,
+		"topBidValue":                updateBidResult.TopBidValue,
+		"prevTopBidValue":            updateBidResult.PrevTopBidValue,
+		"profileRedisSavePayloadUs":  updateBidResult.TimeSavePayload.Microseconds(),
+		"profileRedisUpdateTopBidUs": updateBidResult.TimeUpdateTopBid.Microseconds(),
+		"profileRedisUpdateFloorUs":  updateBidResult.TimeUpdateFloor.Microseconds(),
+	})
+
 	// Join the header bytes with the remaining bytes.
 	// go api.optimisticV2Slow(io.MultiReader(&buf, r), gasLimit, receivedAt, pf, builderEntry)
 
@@ -2256,6 +2293,139 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 		"profile": pf.String(),
 	}).Info("v2 optimistically processed block from builder")
 	w.WriteHeader(http.StatusOK)
+}
+
+type v2SlowPathOpts struct {
+	header                *common.SubmitBlockRequest
+	receivedAt            time.Time
+	eligibleAt            time.Time
+	pf                    common.Profile
+	isCancellationEnabled bool
+	entry                 *blockBuilderCacheEntry
+	gasLimit              uint64
+	pipeliner             redis.Pipeliner
+}
+
+func (api *RelayAPI) optimisticV2SlowPath(r io.Reader, v2Opts v2SlowPathOpts) {
+	log := api.log.WithFields(logrus.Fields{"method": "optimisticV2SlowPath"})
+
+	eph := v2Opts.header.ExecutionPayloadHeader
+	payload := &common.BuilderSubmitBlockRequest{
+		Bellatrix: nil,
+		Capella: &builderCapella.SubmitBlockRequest{
+			Message: v2Opts.header.Message,
+			// Transactions and Withdrawals are intentionally omitted.
+			ExecutionPayload: &capellaspec.ExecutionPayload{ //nolint:exhaustruct
+				ParentHash:    eph.ParentHash,
+				FeeRecipient:  eph.FeeRecipient,
+				StateRoot:     eph.StateRoot,
+				ReceiptsRoot:  eph.ReceiptsRoot,
+				LogsBloom:     eph.LogsBloom,
+				PrevRandao:    eph.PrevRandao,
+				BlockNumber:   eph.BlockNumber,
+				GasLimit:      eph.GasLimit,
+				GasUsed:       eph.GasUsed,
+				Timestamp:     eph.Timestamp,
+				ExtraData:     eph.ExtraData,
+				BaseFeePerGas: eph.BaseFeePerGas,
+				BlockHash:     eph.BlockHash,
+			},
+			Signature: v2Opts.header.Signature,
+		},
+	}
+
+	msg, err := io.ReadAll(r)
+	if err != nil {
+		demotionErr := fmt.Errorf("%w: could not read full message", err)
+		api.demoteBuilder(payload.BuilderPubkey().String(), payload, demotionErr)
+		log.WithError(err).Warn("could not read full message")
+		return
+	}
+
+	// Unmarshall full request.
+	var req common.SubmitBlockRequest
+	err = req.UnmarshalSSZ(msg)
+	if err != nil {
+		demotionErr := fmt.Errorf("%w: could not unmarshall full request", err)
+		api.demoteBuilder(payload.BuilderPubkey().String(), payload, demotionErr)
+		log.WithError(err).Warn("could not unmarshall full request")
+		return
+	}
+
+	// Fill in txns and withdrawals.
+	payload.Capella.ExecutionPayload.Transactions = req.Transactions
+	payload.Capella.ExecutionPayload.Withdrawals = req.Withdrawals
+
+	getPayloadResponse, err := common.BuildGetPayloadResponse(payload)
+	if err != nil {
+		demotionErr := fmt.Errorf("%w: could not construct getPayloadResponse", err)
+		api.demoteBuilder(payload.BuilderPubkey().String(), payload, demotionErr)
+		log.WithError(err).Warn("could not construct getPayloadResponse")
+		return
+	}
+
+	// Create the redis pipeline tx
+	tx := api.redis.NewTxPipeline()
+
+	// Save payload.
+	err = api.redis.SaveExecutionPayloadCapella(context.Background(), tx, payload.Slot(), payload.ProposerPubkey(), payload.BlockHash(), getPayloadResponse.Capella.Capella)
+	if err != nil {
+		demotionErr := fmt.Errorf("%w: could not save execution payload", err)
+		api.demoteBuilder(payload.BuilderPubkey().String(), payload, demotionErr)
+		log.WithError(err).Warn("could not save execution payload")
+		return
+	}
+
+	// Used to communicate simulation result to the deferred function.
+	simResultC := make(chan *blockSimResult, 1)
+
+	// Save the builder submission to the database whenever this function ends
+	defer func() {
+		savePayloadToDatabase := !api.ffDisablePayloadDBStorage
+		var simResult *blockSimResult
+		select {
+		case simResult = <-simResultC:
+		case <-time.After(10 * time.Second):
+			log.Warn("timed out waiting for simulation result")
+			simResult = &blockSimResult{false, false, nil, nil}
+		}
+
+		submissionEntry, err := api.db.SaveBuilderBlockSubmission(payload, simResult.requestErr, simResult.validationErr, v2Opts.receivedAt, v2Opts.eligibleAt, simResult.wasSimulated, savePayloadToDatabase, v2Opts.pf, simResult.optimisticSubmission)
+		if err != nil {
+			log.WithError(err).WithField("payload", payload).Error("saving builder block submission to database failed")
+			return
+		}
+
+		err = api.db.UpsertBlockBuilderEntryAfterSubmission(submissionEntry, simResult.validationErr != nil)
+		if err != nil {
+			log.WithError(err).Error("failed to upsert block-builder-entry")
+		}
+	}()
+
+	// Simulate the block submission and save to db
+	timeBeforeValidation := time.Now().UTC()
+
+	log = log.WithFields(logrus.Fields{
+		"timestampBeforeValidation": timeBeforeValidation.UTC().UnixMilli(),
+	})
+
+	// Construct simulation request.
+	opts := blockSimOptions{
+		isHighPrio: v2Opts.entry.status.IsHighPrio,
+		log:        log,
+		builder:    v2Opts.entry,
+		req: &common.BuilderBlockValidationRequest{
+			BuilderSubmitBlockRequest: *payload,
+			RegisteredGasLimit:        v2Opts.gasLimit,
+		},
+	}
+	go api.processOptimisticBlock(opts, simResultC)
+
+	nextTime := time.Now().UTC()
+	v2Opts.pf.Simulation = uint64(nextTime.Sub(v2Opts.eligibleAt).Microseconds())
+
+	// All done
+	log.Info("received v2 block from builder")
 }
 
 // ---------------
