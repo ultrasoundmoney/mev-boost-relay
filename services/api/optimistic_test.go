@@ -528,6 +528,7 @@ func TestOptimisticV2SlowPath(t *testing.T) {
 						IsOptimistic: true,
 					},
 				},
+				pipeliner: backend.redis.NewTxPipeline(),
 			}
 			backend.relay.blockSimRateLimiter = &MockBlockSimulationRateLimiter{
 				simulationError: tc.simErr,

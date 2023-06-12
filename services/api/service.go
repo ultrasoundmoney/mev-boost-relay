@@ -2133,8 +2133,11 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 		return
 	}
 
+	// Create the redis pipeline tx
+	tx := api.redis.NewTxPipeline()
+
 	// Reject new submissions once the payload for this slot was delivered - TODO: store in memory as well
-	slotLastPayloadDelivered, err := api.redis.GetLastSlotDelivered()
+	slotLastPayloadDelivered, err := api.redis.GetLastSlotDelivered(req.Context(), tx)
 	if err != nil && !errors.Is(err, redis.Nil) {
 		log.WithError(err).Error("failed to get delivered payload slot from redis")
 	} else if bid.Slot <= slotLastPayloadDelivered {
@@ -2155,6 +2158,7 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 		isCancellationEnabled: isCancellationEnabled,
 		entry:                 builderEntry,
 		gasLimit:              slotDuty.Entry.Message.GasLimit,
+		pipeliner:             tx,
 	})
 
 	log.WithFields(logrus.Fields{
@@ -2172,6 +2176,7 @@ type v2SlowPathOpts struct {
 	isCancellationEnabled bool
 	entry                 *blockBuilderCacheEntry
 	gasLimit              uint64
+	pipeliner             redis.Pipeliner
 }
 
 func (api *RelayAPI) optimisticV2SlowPath(r io.Reader, v2Opts v2SlowPathOpts) {
@@ -2251,7 +2256,7 @@ func (api *RelayAPI) optimisticV2SlowPath(r io.Reader, v2Opts v2SlowPathOpts) {
 	}()
 
 	// Grab floor bid value
-	floorBidValue, err := api.redis.GetFloorBidValue(payload.Slot(), payload.ParentHash(), payload.ProposerPubkey())
+	floorBidValue, err := api.redis.GetFloorBidValue(context.Background(), v2Opts.pipeliner, payload.Slot(), payload.ParentHash(), payload.ProposerPubkey())
 	if err != nil {
 		log.WithError(err).Error("failed to get floor bid value from redis")
 	} else {
@@ -2264,7 +2269,7 @@ func (api *RelayAPI) optimisticV2SlowPath(r io.Reader, v2Opts v2SlowPathOpts) {
 	if v2Opts.isCancellationEnabled && isBidBelowFloor { // with cancellations: if below floor -> delete previous bid
 		simResultC <- &blockSimResult{false, false, nil, nil}
 		log.Info("submission below floor bid value, with cancellation")
-		err := api.redis.DelBuilderBid(payload.Slot(), payload.ParentHash(), payload.ProposerPubkey(), payload.BuilderPubkey().String())
+		err := api.redis.DelBuilderBid(context.Background(), v2Opts.pipeliner, payload.Slot(), payload.ParentHash(), payload.ProposerPubkey(), payload.BuilderPubkey().String())
 		if err != nil {
 			log.WithError(err).Error("failed processing cancellable bid below floor")
 			return
@@ -2278,7 +2283,7 @@ func (api *RelayAPI) optimisticV2SlowPath(r io.Reader, v2Opts v2SlowPathOpts) {
 
 	// Get the latest top bid value from Redis
 	bidIsTopBid := false
-	topBidValue, err := api.redis.GetTopBidValue(payload.Slot(), payload.ParentHash(), payload.ProposerPubkey())
+	topBidValue, err := api.redis.GetTopBidValue(context.Background(), v2Opts.pipeliner, payload.Slot(), payload.ParentHash(), payload.ProposerPubkey())
 	if err != nil {
 		log.WithError(err).Error("failed to get top bid value from redis")
 	} else {
