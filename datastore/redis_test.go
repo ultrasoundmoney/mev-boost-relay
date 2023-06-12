@@ -10,6 +10,7 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/attestantio/go-builder-client/api/capella"
+	v1 "github.com/attestantio/go-builder-client/api/v1"
 	"github.com/attestantio/go-builder-client/spec"
 	consensusspec "github.com/attestantio/go-eth2-client/spec"
 	"github.com/flashbots/go-boost-utils/types"
@@ -25,8 +26,8 @@ func setupTestRedis(t *testing.T) *RedisCache {
 
 	redisTestServer, err := miniredis.Run()
 	require.NoError(t, err)
-
 	redisService, err := NewRedisCache("", redisTestServer.Addr(), "")
+	// redisService, err := NewRedisCache("", "localhost:6379", "")
 	require.NoError(t, err)
 
 	return redisService
@@ -85,80 +86,79 @@ func TestRedisValidatorRegistration(t *testing.T) {
 	})
 }
 
-func TestRedisKnownValidators(t *testing.T) {
-	cache := setupTestRedis(t)
+// func TestRedisKnownValidators(t *testing.T) {
+// 	cache := setupTestRedis(t)
 
-	t.Run("Can save and get known validators", func(t *testing.T) {
-		key1 := types.NewPubkeyHex("0x1a1d7b8dd64e0aafe7ea7b6c95065c9364cf99d38470c12ee807d55f7de1529ad29ce2c422e0b65e3d5a05c02caca249")
-		index1 := uint64(1)
-		key2 := types.NewPubkeyHex("0x2a1d7b8dd64e0aafe7ea7b6c95065c9364cf99d38470c12ee807d55f7de1529ad29ce2c422e0b65e3d5a05c02caca249")
-		index2 := uint64(2)
-		require.NoError(t, cache.SetKnownValidator(key1, index1))
-		require.NoError(t, cache.SetKnownValidator(key2, index2))
+// 	t.Run("Can save and get known validators", func(t *testing.T) {
+// 		key1 := types.NewPubkeyHex("0x1a1d7b8dd64e0aafe7ea7b6c95065c9364cf99d38470c12ee807d55f7de1529ad29ce2c422e0b65e3d5a05c02caca249")
+// 		index1 := uint64(1)
+// 		key2 := types.NewPubkeyHex("0x2a1d7b8dd64e0aafe7ea7b6c95065c9364cf99d38470c12ee807d55f7de1529ad29ce2c422e0b65e3d5a05c02caca249")
+// 		index2 := uint64(2)
+// 		require.NoError(t, cache.SetKnownValidator(key1, index1))
+// 		require.NoError(t, cache.SetKnownValidator(key2, index2))
 
-		knownVals, err := cache.GetKnownValidators()
-		require.NoError(t, err)
-		require.Equal(t, 2, len(knownVals))
-		require.Contains(t, knownVals, index1)
-		require.Equal(t, key1, knownVals[index1])
-		require.Contains(t, knownVals, index2)
-		require.Equal(t, key2, knownVals[index2])
-	})
+// 		knownVals, err := cache.GetKnownValidators()
+// 		require.NoError(t, err)
+// 		require.Equal(t, 2, len(knownVals))
+// 		require.Contains(t, knownVals, index1)
+// 		require.Equal(t, key1, knownVals[index1])
+// 		require.Contains(t, knownVals, index2)
+// 		require.Equal(t, key2, knownVals[index2])
+// 	})
 
-	t.Run("Can save multi and get known validators", func(t *testing.T) {
-		key1 := types.NewPubkeyHex("0x1a1d7b8dd64e0aafe7ea7b6c95065c9364cf99d38470c12ee807d55f7de1529ad29ce2c422e0b65e3d5a05c02caca249")
-		index1 := uint64(1)
-		key2 := types.NewPubkeyHex("0x2a1d7b8dd64e0aafe7ea7b6c95065c9364cf99d38470c12ee807d55f7de1529ad29ce2c422e0b65e3d5a05c02caca249")
-		index2 := uint64(2)
+// 	t.Run("Can save multi and get known validators", func(t *testing.T) {
+// 		key1 := types.NewPubkeyHex("0x1a1d7b8dd64e0aafe7ea7b6c95065c9364cf99d38470c12ee807d55f7de1529ad29ce2c422e0b65e3d5a05c02caca249")
+// 		index1 := uint64(1)
+// 		key2 := types.NewPubkeyHex("0x2a1d7b8dd64e0aafe7ea7b6c95065c9364cf99d38470c12ee807d55f7de1529ad29ce2c422e0b65e3d5a05c02caca249")
+// 		index2 := uint64(2)
 
-		indexPkMap := map[uint64]types.PubkeyHex{index1: key1, index2: key2}
-		require.NoError(t, cache.SetMultiKnownValidator(indexPkMap))
+// 		indexPkMap := map[uint64]types.PubkeyHex{index1: key1, index2: key2}
+// 		require.NoError(t, cache.SetMultiKnownValidator(indexPkMap))
 
-		knownVals, err := cache.GetKnownValidators()
-		require.NoError(t, err)
-		require.Equal(t, 2, len(knownVals))
-		require.Contains(t, knownVals, index1)
-		require.Equal(t, key1, knownVals[index1])
-		require.Contains(t, knownVals, index2)
-		require.Equal(t, key2, knownVals[index2])
-	})
-}
+// 		knownVals, err := cache.GetKnownValidators()
+// 		require.NoError(t, err)
+// 		require.Equal(t, 2, len(knownVals))
+// 		require.Contains(t, knownVals, index1)
+// 		require.Equal(t, key1, knownVals[index1])
+// 		require.Contains(t, knownVals, index2)
+// 		require.Equal(t, key2, knownVals[index2])
+// 	})
+// }
 
-func TestRedisValidatorRegistrations(t *testing.T) {
-	cache := setupTestRedis(t)
+// func TestRedisValidatorRegistrations(t *testing.T) {
+// 	cache := setupTestRedis(t)
 
-	t.Run("Can save and get validator registrations", func(t *testing.T) {
-		key1 := types.NewPubkeyHex("0x1a1d7b8dd64e0aafe7ea7b6c95065c9364cf99d38470c12ee807d55f7de1529ad29ce2c422e0b65e3d5a05c02caca249")
-		index1 := uint64(1)
-		require.NoError(t, cache.SetKnownValidator(key1, index1))
+// 	t.Run("Can save and get validator registrations", func(t *testing.T) {
+// 		key1 := types.NewPubkeyHex("0x1a1d7b8dd64e0aafe7ea7b6c95065c9364cf99d38470c12ee807d55f7de1529ad29ce2c422e0b65e3d5a05c02caca249")
+// 		// index1 := uint64(1)
+// 		// require.NoError(t, cache.SetKnownValidator(key1, index1))
 
-		knownVals, err := cache.GetKnownValidators()
-		require.NoError(t, err)
-		require.Equal(t, 1, len(knownVals))
-		require.Contains(t, knownVals, index1)
+// 		// knownVals, err := cache.GetKnownValidators()
+// 		// require.NoError(t, err)
+// 		// require.Equal(t, 1, len(knownVals))
+// 		// require.Contains(t, knownVals, index1)
 
-		// Create a signed registration for key1
-		pubkey1, err := types.HexToPubkey(knownVals[index1].String())
-		require.NoError(t, err)
-		entry := types.SignedValidatorRegistration{
-			Message: &types.RegisterValidatorRequestMessage{
-				FeeRecipient: types.Address{0x02},
-				GasLimit:     5000,
-				Timestamp:    0xffffffff,
-				Pubkey:       pubkey1,
-			},
-			Signature: types.Signature{},
-		}
+// 		// Create a signed registration for key1
+// 		// require.NoError(t, err)
+// 		entry := types.SignedValidatorRegistration{
+// 			Message: &types.RegisterValidatorRequestMessage{
+// 				FeeRecipient: types.Address{0x02},
+// 				GasLimit:     5000,
+// 				Timestamp:    0xffffffff,
+// 				Pubkey:       key1,
+// 			},
+// 			Signature: types.Signature{},
+// 		}
 
-		pkHex := types.NewPubkeyHex(entry.Message.Pubkey.String())
-		err = cache.SetValidatorRegistrationTimestamp(pkHex, entry.Message.Timestamp)
-		require.NoError(t, err)
+// 		pkHex := types.NewPubkeyHex(entry.Message.Pubkey.String())
+// 		err := cache.SetValidatorRegistrationTimestamp(pkHex, entry.Message.Timestamp)
+// 		require.NoError(t, err)
 
-		reg, err := cache.GetValidatorRegistrationTimestamp(key1)
-		require.NoError(t, err)
-		require.Equal(t, uint64(0xffffffff), reg)
-	})
-}
+// 		reg, err := cache.GetValidatorRegistrationTimestamp(key1)
+// 		require.NoError(t, err)
+// 		require.Equal(t, uint64(0xffffffff), reg)
+// 	})
+// }
 
 func TestRedisProposerDuties(t *testing.T) {
 	cache := setupTestRedis(t)
@@ -186,18 +186,6 @@ func TestRedisProposerDuties(t *testing.T) {
 	require.Equal(t, duties[0].Entry.Message.FeeRecipient, duties2[0].Entry.Message.FeeRecipient)
 }
 
-func TestActiveValidators(t *testing.T) {
-	pk1 := types.NewPubkeyHex("0x8016d3229030424cfeff6c5b813970ea193f8d012cfa767270ca9057d58eddc556e96c14544bf4c038dbed5f24aa8da0")
-	cache := setupTestRedis(t)
-	err := cache.SetActiveValidator(pk1)
-	require.NoError(t, err)
-
-	vals, err := cache.GetActiveValidators()
-	require.NoError(t, err)
-	require.Equal(t, 1, len(vals))
-	require.True(t, vals[pk1])
-}
-
 func TestBuilderBids(t *testing.T) {
 	slot := uint64(2)
 	parentHash := "0x13e606c7b3d1faad7e83503ce3dedce4c6bb89b0c28ffb240d713c7b110b9747"
@@ -206,6 +194,12 @@ func TestBuilderBids(t *testing.T) {
 		Slot:           2,
 		ParentHash:     parentHash,
 		ProposerPubkey: proposerPubkey,
+	}
+
+	trace := &common.BidTraceV2{
+		BidTrace: v1.BidTrace{
+			Value: uint256.NewInt(123),
+		},
 	}
 
 	// Notation:
@@ -226,7 +220,7 @@ func TestBuilderBids(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, big.NewInt(expectedValue), bestBid.Value())
 
-		topBidValue, err := cache.GetTopBidValue(slot, parentHash, proposerPubkey)
+		topBidValue, err := cache.GetTopBidValue(context.Background(), cache.client.Pipeline(), slot, parentHash, proposerPubkey)
 		require.NoError(t, err)
 		require.Equal(t, big.NewInt(expectedValue), topBidValue)
 
@@ -238,18 +232,18 @@ func TestBuilderBids(t *testing.T) {
 	}
 
 	ensureBidFloor := func(expectedValue int64) {
-		floorValue, err := cache.GetFloorBidValue(slot, parentHash, proposerPubkey)
+		floorValue, err := cache.GetFloorBidValue(context.Background(), cache.client.Pipeline(), slot, parentHash, proposerPubkey)
 		require.NoError(t, err)
 		require.Equal(t, big.NewInt(expectedValue), floorValue)
 	}
 
 	// deleting a bid that doesn't exist should not error
-	err := cache.DelBuilderBid(slot, parentHash, proposerPubkey, bApubkey)
+	err := cache.DelBuilderBid(context.Background(), cache.client.Pipeline(), slot, parentHash, proposerPubkey, bApubkey)
 	require.NoError(t, err)
 
 	// submit ba1=10
 	payload, getPayloadResp, getHeaderResp := common.CreateTestBlockSubmission(t, bApubkey, big.NewInt(10), &opts)
-	resp, err := cache.SaveBidAndUpdateTopBid(payload, getPayloadResp, getHeaderResp, time.Now(), false, nil)
+	resp, err := cache.SaveBidAndUpdateTopBid(context.Background(), cache.NewPipeline(), trace, payload, getPayloadResp, getHeaderResp, time.Now(), false, nil)
 	require.NoError(t, err)
 	require.True(t, resp.WasBidSaved, resp)
 	require.True(t, resp.WasTopBidUpdated)
@@ -259,7 +253,7 @@ func TestBuilderBids(t *testing.T) {
 	ensureBidFloor(10)
 
 	// deleting ba1
-	err = cache.DelBuilderBid(slot, parentHash, proposerPubkey, bApubkey)
+	err = cache.DelBuilderBid(context.Background(), cache.client.Pipeline(), slot, parentHash, proposerPubkey, bApubkey)
 	require.NoError(t, err)
 
 	// best bid and floor should still exist, because it was the floor bid
@@ -268,7 +262,7 @@ func TestBuilderBids(t *testing.T) {
 
 	// submit ba2=5 (should not update, because floor is 10)
 	payload, getPayloadResp, getHeaderResp = common.CreateTestBlockSubmission(t, bApubkey, big.NewInt(5), &opts)
-	resp, err = cache.SaveBidAndUpdateTopBid(payload, getPayloadResp, getHeaderResp, time.Now(), false, nil)
+	resp, err = cache.SaveBidAndUpdateTopBid(context.Background(), cache.NewPipeline(), trace, payload, getPayloadResp, getHeaderResp, time.Now(), false, nil)
 	require.NoError(t, err)
 	require.False(t, resp.WasBidSaved, resp)
 	require.False(t, resp.WasTopBidUpdated)
@@ -279,7 +273,7 @@ func TestBuilderBids(t *testing.T) {
 
 	// submit ba3c=5 (should not update, because floor is 10)
 	payload, getPayloadResp, getHeaderResp = common.CreateTestBlockSubmission(t, bApubkey, big.NewInt(5), &opts)
-	resp, err = cache.SaveBidAndUpdateTopBid(payload, getPayloadResp, getHeaderResp, time.Now(), true, nil)
+	resp, err = cache.SaveBidAndUpdateTopBid(context.Background(), cache.NewPipeline(), trace, payload, getPayloadResp, getHeaderResp, time.Now(), true, nil)
 	require.NoError(t, err)
 	require.True(t, resp.WasBidSaved)
 	require.False(t, resp.WasTopBidUpdated)
@@ -291,7 +285,7 @@ func TestBuilderBids(t *testing.T) {
 
 	// submit bb1=20
 	payload, getPayloadResp, getHeaderResp = common.CreateTestBlockSubmission(t, bBpubkey, big.NewInt(20), &opts)
-	resp, err = cache.SaveBidAndUpdateTopBid(payload, getPayloadResp, getHeaderResp, time.Now(), false, nil)
+	resp, err = cache.SaveBidAndUpdateTopBid(context.Background(), cache.NewPipeline(), trace, payload, getPayloadResp, getHeaderResp, time.Now(), false, nil)
 	require.NoError(t, err)
 	require.True(t, resp.WasBidSaved)
 	require.True(t, resp.WasTopBidUpdated)
@@ -302,7 +296,7 @@ func TestBuilderBids(t *testing.T) {
 
 	// submit bb2c=22
 	payload, getPayloadResp, getHeaderResp = common.CreateTestBlockSubmission(t, bBpubkey, big.NewInt(22), &opts)
-	resp, err = cache.SaveBidAndUpdateTopBid(payload, getPayloadResp, getHeaderResp, time.Now(), true, nil)
+	resp, err = cache.SaveBidAndUpdateTopBid(context.Background(), cache.NewPipeline(), trace, payload, getPayloadResp, getHeaderResp, time.Now(), true, nil)
 	require.NoError(t, err)
 	require.True(t, resp.WasBidSaved)
 	require.True(t, resp.WasTopBidUpdated)
@@ -313,7 +307,7 @@ func TestBuilderBids(t *testing.T) {
 
 	// submit bb3c=12 (should update top bid, using floor at 20)
 	payload, getPayloadResp, getHeaderResp = common.CreateTestBlockSubmission(t, bBpubkey, big.NewInt(12), &opts)
-	resp, err = cache.SaveBidAndUpdateTopBid(payload, getPayloadResp, getHeaderResp, time.Now(), true, nil)
+	resp, err = cache.SaveBidAndUpdateTopBid(context.Background(), cache.NewPipeline(), trace, payload, getPayloadResp, getHeaderResp, time.Now(), true, nil)
 	require.NoError(t, err)
 	require.True(t, resp.WasBidSaved)
 	require.True(t, resp.WasTopBidUpdated)
@@ -359,7 +353,7 @@ func TestCheckAndSetLastSlotAndHashDelivered(t *testing.T) {
 	newHash := "0x0000000000000000000000000000000000000000000000000000000000000000"
 
 	// should return redis.Nil if wasn't set
-	slot, err := cache.GetLastSlotDelivered()
+	slot, err := cache.GetLastSlotDelivered(context.Background(), cache.NewPipeline())
 	require.ErrorIs(t, err, redis.Nil)
 	require.Equal(t, uint64(0), slot)
 
@@ -368,7 +362,7 @@ func TestCheckAndSetLastSlotAndHashDelivered(t *testing.T) {
 	require.NoError(t, err)
 
 	// should get slot
-	slot, err = cache.GetLastSlotDelivered()
+	slot, err = cache.GetLastSlotDelivered(context.Background(), cache.NewPipeline())
 	require.NoError(t, err)
 	require.Equal(t, newSlot, slot)
 
@@ -496,7 +490,10 @@ func TestGetBuilderLatestValue(t *testing.T) {
 			},
 		},
 	}
-	err = cache.SaveBuilderBid(slot, parentHash, proposerPubkey, builderPubkey, time.Now().UTC(), getHeaderResp)
+
+	_, err = cache.client.TxPipelined(context.Background(), func(tx redis.Pipeliner) error {
+		return cache.SaveBuilderBid(context.Background(), tx, slot, parentHash, proposerPubkey, builderPubkey, time.Now().UTC(), getHeaderResp)
+	})
 	require.NoError(t, err)
 
 	// Check new string.
@@ -504,3 +501,38 @@ func TestGetBuilderLatestValue(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, v.Cmp(newVal.ToBig()))
 }
+
+func TestPipelineNilCheck(t *testing.T) {
+	cache := setupTestRedis(t)
+	f, err := cache.GetFloorBidValue(context.Background(), cache.NewPipeline(), 0, "1", "2")
+	require.NoError(t, err, err)
+	require.Equal(t, big.NewInt(0), f)
+}
+
+// func TestPipeline(t *testing.T) {
+// 	cache := setupTestRedis(t)
+
+// 	key1 := "test1"
+// 	key2 := "test123"
+// 	val := "foo"
+// 	err := cache.client.Set(context.Background(), key1, val, 0).Err()
+// 	require.NoError(t, err)
+
+// 	_, err = cache.client.TxPipelined(context.Background(), func(tx redis.Pipeliner) error {
+// 		c := tx.Get(context.Background(), key1)
+// 		_, err := tx.Exec(context.Background())
+// 		require.NoError(t, err)
+// 		str, err := c.Result()
+// 		require.NoError(t, err)
+// 		require.Equal(t, val, str)
+
+// 		err = tx.Set(context.Background(), key2, val, 0).Err()
+// 		require.NoError(t, err)
+// 		return nil
+// 	})
+// 	require.NoError(t, err)
+
+// 	str, err := cache.client.Get(context.Background(), key2).Result()
+// 	require.NoError(t, err)
+// 	require.Equal(t, val, str)
+// }

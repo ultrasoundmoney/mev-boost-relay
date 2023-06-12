@@ -1,7 +1,12 @@
 package common
 
 import (
+	"compress/gzip"
 	"encoding/hex"
+	"encoding/json"
+	"io"
+	"os"
+	"testing"
 
 	"github.com/attestantio/go-builder-client/api/capella"
 	bellatrixspec "github.com/attestantio/go-eth2-client/spec/bellatrix"
@@ -10,6 +15,7 @@ import (
 	"github.com/flashbots/go-boost-utils/bls"
 	boostTypes "github.com/flashbots/go-boost-utils/types"
 	"github.com/sirupsen/logrus"
+	"github.com/stretchr/testify/require"
 )
 
 // TestLog is used to log information in the test methods
@@ -73,6 +79,26 @@ func TestBuilderSubmitBlockRequest(sk *bls.SecretKey, bid *BidTraceV2) BuilderSu
 			},
 		},
 	}
+}
+
+func LoadGzippedBytes(t *testing.T, filename string) []byte {
+	t.Helper()
+	fi, err := os.Open(filename)
+	require.NoError(t, err)
+	defer fi.Close()
+	fz, err := gzip.NewReader(fi)
+	require.NoError(t, err)
+	defer fz.Close()
+	val, err := io.ReadAll(fz)
+	require.NoError(t, err)
+	return val
+}
+
+func LoadGzippedJSON(t *testing.T, filename string, dst any) {
+	t.Helper()
+	b := LoadGzippedBytes(t, filename)
+	err := json.Unmarshal(b, dst)
+	require.NoError(t, err)
 }
 
 func TestBuilderSubmitBlockRequestV2(sk *bls.SecretKey, bid *BidTraceV2) *SubmitBlockRequest {
