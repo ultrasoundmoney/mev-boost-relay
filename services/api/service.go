@@ -2157,7 +2157,29 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 		return
 	}
 
-	payload := new(common.BuilderSubmitBlockRequest)
+	payload := &common.BuilderSubmitBlockRequest{
+		Bellatrix: nil,
+		Capella: &builderCapella.SubmitBlockRequest{
+			Message: header.Message,
+			// Transactions and Withdrawals are intentionally omitted.
+			ExecutionPayload: &capellaspec.ExecutionPayload{ //nolint:exhaustruct
+				ParentHash:    eph.ParentHash,
+				FeeRecipient:  eph.FeeRecipient,
+				StateRoot:     eph.StateRoot,
+				ReceiptsRoot:  eph.ReceiptsRoot,
+				LogsBloom:     eph.LogsBloom,
+				PrevRandao:    eph.PrevRandao,
+				BlockNumber:   eph.BlockNumber,
+				GasLimit:      eph.GasLimit,
+				GasUsed:       eph.GasUsed,
+				Timestamp:     eph.Timestamp,
+				ExtraData:     eph.ExtraData,
+				BaseFeePerGas: eph.BaseFeePerGas,
+				BlockHash:     eph.BlockHash,
+			},
+			Signature: header.Signature,
+		},
+	}
 
 	bidTrace := &common.BidTraceV2{
 		BidTrace:    *header.Message,
@@ -2189,6 +2211,7 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 	// Join the header bytes with the remaining bytes.
 	go api.optimisticV2SlowPath(io.MultiReader(&buf, r), v2SlowPathOpts{
 		header:                &header,
+		payload:               payload,
 		receivedAt:            receivedAt,
 		eligibleAt:            time.Now().UTC(),
 		pf:                    pf,
@@ -2207,6 +2230,7 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 
 type v2SlowPathOpts struct {
 	header                *common.SubmitBlockRequest
+	payload               *common.BuilderSubmitBlockRequest
 	receivedAt            time.Time
 	eligibleAt            time.Time
 	pf                    common.Profile
@@ -2219,31 +2243,7 @@ type v2SlowPathOpts struct {
 func (api *RelayAPI) optimisticV2SlowPath(r io.Reader, v2Opts v2SlowPathOpts) {
 	log := api.log.WithFields(logrus.Fields{"method": "optimisticV2SlowPath"})
 
-	eph := v2Opts.header.ExecutionPayloadHeader
-	payload := &common.BuilderSubmitBlockRequest{
-		Bellatrix: nil,
-		Capella: &builderCapella.SubmitBlockRequest{
-			Message: v2Opts.header.Message,
-			// Transactions and Withdrawals are intentionally omitted.
-			ExecutionPayload: &capellaspec.ExecutionPayload{ //nolint:exhaustruct
-				ParentHash:    eph.ParentHash,
-				FeeRecipient:  eph.FeeRecipient,
-				StateRoot:     eph.StateRoot,
-				ReceiptsRoot:  eph.ReceiptsRoot,
-				LogsBloom:     eph.LogsBloom,
-				PrevRandao:    eph.PrevRandao,
-				BlockNumber:   eph.BlockNumber,
-				GasLimit:      eph.GasLimit,
-				GasUsed:       eph.GasUsed,
-				Timestamp:     eph.Timestamp,
-				ExtraData:     eph.ExtraData,
-				BaseFeePerGas: eph.BaseFeePerGas,
-				BlockHash:     eph.BlockHash,
-			},
-			Signature: v2Opts.header.Signature,
-		},
-	}
-
+	payload := v2Opts.payload
 	msg, err := io.ReadAll(r)
 	if err != nil {
 		demotionErr := fmt.Errorf("%w: could not read full message", err)

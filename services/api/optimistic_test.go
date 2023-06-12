@@ -10,8 +10,10 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	builderCapella "github.com/attestantio/go-builder-client/api/capella"
 	v1 "github.com/attestantio/go-builder-client/api/v1"
 	"github.com/attestantio/go-eth2-client/spec/bellatrix"
 	consensuscapella "github.com/attestantio/go-eth2-client/spec/capella"
@@ -48,6 +50,33 @@ func getTestBidTrace(pubkey phase0.BLSPubKey, value uint64) *common.BidTraceV2 {
 			BuilderPubkey:        pubkey,
 			ProposerFeeRecipient: feeRecipient,
 			Value:                uint256.NewInt(value),
+		},
+	}
+}
+
+func getTestPayload(req *common.SubmitBlockRequest) *common.BuilderSubmitBlockRequest {
+	eph := req.ExecutionPayloadHeader
+	return &common.BuilderSubmitBlockRequest{
+		Bellatrix: nil,
+		Capella: &builderCapella.SubmitBlockRequest{
+			Message: req.Message,
+			// Transactions and Withdrawals are intentionally omitted.
+			ExecutionPayload: &consensuscapella.ExecutionPayload{ //nolint:exhaustruct
+				ParentHash:    eph.ParentHash,
+				FeeRecipient:  eph.FeeRecipient,
+				StateRoot:     eph.StateRoot,
+				ReceiptsRoot:  eph.ReceiptsRoot,
+				LogsBloom:     eph.LogsBloom,
+				PrevRandao:    eph.PrevRandao,
+				BlockNumber:   eph.BlockNumber,
+				GasLimit:      eph.GasLimit,
+				GasUsed:       eph.GasUsed,
+				Timestamp:     eph.Timestamp,
+				ExtraData:     eph.ExtraData,
+				BaseFeePerGas: eph.BaseFeePerGas,
+				BlockHash:     eph.BlockHash,
+			},
+			Signature: req.Signature,
 		},
 	}
 }
@@ -518,11 +547,13 @@ func TestOptimisticV2SlowPath(t *testing.T) {
 			backend.relay.optimisticSlot.Store(slot)
 
 			req := common.TestBuilderSubmitBlockRequestV2(secretkey, getTestBidTrace(*pubkey, 999))
+			payload := getTestPayload(req)
 			outBytes, err := req.MarshalSSZ()
 			require.NoError(t, err)
 			r := bytes.NewReader(outBytes)
 			v2Opts := v2SlowPathOpts{
-				header: req,
+				header:  req,
+				payload: payload,
 				entry: &blockBuilderCacheEntry{
 					status: common.BuilderStatus{
 						IsOptimistic: true,
@@ -534,6 +565,7 @@ func TestOptimisticV2SlowPath(t *testing.T) {
 				simulationError: tc.simErr,
 			}
 			backend.relay.optimisticV2SlowPath(r, v2Opts)
+			time.Sleep(100 * time.Millisecond)
 			// Check demotion status is set to expected.
 			mockDB, ok := backend.relay.db.(*database.MockDB)
 			require.True(t, ok)
@@ -547,10 +579,12 @@ func TestOptimisticV2MarshallError(t *testing.T) {
 	backend.relay.optimisticSlot.Store(slot)
 
 	req := common.TestBuilderSubmitBlockRequestV2(secretkey, getTestBidTrace(*pubkey, 999))
+	payload := getTestPayload(req)
 	errBytes := make([]byte, req.SizeSSZ())
 	r := bytes.NewReader(errBytes)
 	v2Opts := v2SlowPathOpts{
-		header: req,
+		header:  req,
+		payload: payload,
 	}
 	backend.relay.optimisticV2SlowPath(r, v2Opts)
 	// Check demotion status is set to true.
