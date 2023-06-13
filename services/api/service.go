@@ -2189,12 +2189,12 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 	//
 	// Save to Redis
 	//
-	updateBidResult, err := api.redis.SaveBidAndUpdateTopBid(context.Background(), tx, bidTrace, payload, nil, getHeaderResponse, receivedAt, isCancellationEnabled, nil)
-	if err != nil {
-		log.WithError(err).Error("could not save bid and update top bids")
-		api.RespondError(w, http.StatusInternalServerError, "failed saving and updating bid")
-		return
-	}
+	// updateBidResult, err := api.redis.SaveBidAndUpdateTopBid(context.Background(), tx, bidTrace, payload, nil, getHeaderResponse, receivedAt, isCancellationEnabled, nil)
+	// if err != nil {
+	// 	log.WithError(err).Error("could not save bid and update top bids")
+	// 	api.RespondError(w, http.StatusInternalServerError, "failed saving and updating bid")
+	// 	return
+	// }
 
 	// Add fields to logs
 	log = log.WithFields(logrus.Fields{
