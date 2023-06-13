@@ -2208,6 +2208,8 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 	// 	"profileRedisUpdateFloorUs":  updateBidResult.TimeUpdateFloor.Microseconds(),
 	// })
 
+	eligibleAt := time.Now().UTC()
+
 	// Read all remaining bytes into the tee reader
 	remainder, err := io.ReadAll(r)
 	if err != nil {
@@ -2223,7 +2225,7 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 		header:                &header,
 		payload:               payload,
 		receivedAt:            receivedAt,
-		eligibleAt:            time.Now().UTC(),
+		eligibleAt:            eligibleAt,
 		pf:                    pf,
 		isCancellationEnabled: isCancellationEnabled,
 		entry:                 builderEntry,
@@ -2295,6 +2297,13 @@ func (api *RelayAPI) optimisticV2SlowPath(r io.Reader, v2Opts v2SlowPathOpts) {
 		log.WithError(err).Warn("could not save execution payload")
 		return
 	}
+
+	currentTime := time.Now().UTC()
+	log.WithFields(logrus.Fields{
+		"timeStampExecutionPayloadSaved": currentTime.UnixMilli(),
+		"timeSinceReceivedAt":            v2Opts.receivedAt.Sub(currentTime).Milliseconds(),
+		"timeSinceEligibleAt":            v2Opts.eligibleAt.Sub(currentTime).Milliseconds(),
+	}).Info("v2 execution payload saved")
 
 	// Used to communicate simulation result to the deferred function.
 	simResultC := make(chan *blockSimResult, 1)
