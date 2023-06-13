@@ -2149,14 +2149,6 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 	nextTime = time.Now().UTC()
 	pf.Prechecks = uint64(nextTime.Sub(prevTime).Microseconds())
 
-	// Prepare the response data
-	getHeaderResponse, err := common.BuildGetHeaderResponseHeaderOnly(header.Message.Value, eph, api.blsSk, api.publicKey, api.opts.EthNetDetails.DomainBuilder)
-	if err != nil {
-		log.WithError(err).Error("could not sign builder bid")
-		api.RespondError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
 	payload := &common.BuilderSubmitBlockRequest{
 		Bellatrix: nil,
 		Capella: &builderCapella.SubmitBlockRequest{
@@ -2181,10 +2173,18 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 		},
 	}
 
-	bidTrace := &common.BidTraceV2{
-		BidTrace:    *header.Message,
-		BlockNumber: header.ExecutionPayloadHeader.BlockNumber,
-	}
+	// Prepare the response data
+	// getHeaderResponse, err := common.BuildGetHeaderResponseHeaderOnly(header.Message.Value, eph, api.blsSk, api.publicKey, api.opts.EthNetDetails.DomainBuilder)
+	// if err != nil {
+	// 	log.WithError(err).Error("could not sign builder bid")
+	// 	api.RespondError(w, http.StatusBadRequest, err.Error())
+	// 	return
+	// }
+
+	// bidTrace := &common.BidTraceV2{
+	// 	BidTrace:    *header.Message,
+	// 	BlockNumber: header.ExecutionPayloadHeader.BlockNumber,
+	// }
 
 	//
 	// Save to Redis
@@ -2197,16 +2197,16 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 	// }
 
 	// Add fields to logs
-	log = log.WithFields(logrus.Fields{
-		"timestampAfterBidUpdate":    time.Now().UTC().UnixMilli(),
-		"wasBidSavedInRedis":         updateBidResult.WasBidSaved,
-		"wasTopBidUpdated":           updateBidResult.WasTopBidUpdated,
-		"topBidValue":                updateBidResult.TopBidValue,
-		"prevTopBidValue":            updateBidResult.PrevTopBidValue,
-		"profileRedisSavePayloadUs":  updateBidResult.TimeSavePayload.Microseconds(),
-		"profileRedisUpdateTopBidUs": updateBidResult.TimeUpdateTopBid.Microseconds(),
-		"profileRedisUpdateFloorUs":  updateBidResult.TimeUpdateFloor.Microseconds(),
-	})
+	// log = log.WithFields(logrus.Fields{
+	// 	"timestampAfterBidUpdate":    time.Now().UTC().UnixMilli(),
+	// 	"wasBidSavedInRedis":         updateBidResult.WasBidSaved,
+	// 	"wasTopBidUpdated":           updateBidResult.WasTopBidUpdated,
+	// 	"topBidValue":                updateBidResult.TopBidValue,
+	// 	"prevTopBidValue":            updateBidResult.PrevTopBidValue,
+	// 	"profileRedisSavePayloadUs":  updateBidResult.TimeSavePayload.Microseconds(),
+	// 	"profileRedisUpdateTopBidUs": updateBidResult.TimeUpdateTopBid.Microseconds(),
+	// 	"profileRedisUpdateFloorUs":  updateBidResult.TimeUpdateFloor.Microseconds(),
+	// })
 
 	// Read all remaining bytes into the tee reader
 	remainder, err := io.ReadAll(r)
