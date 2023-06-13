@@ -2208,8 +2208,18 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 		"profileRedisUpdateFloorUs":  updateBidResult.TimeUpdateFloor.Microseconds(),
 	})
 
+	// Read all remaining bytes into the tee reader
+	remainder, err := io.ReadAll(r)
+	if err != nil {
+		demotionErr := fmt.Errorf("%w: could not read full message", err)
+		api.demoteBuilder(payload.BuilderPubkey().String(), payload, demotionErr)
+		log.WithError(err).Warn("could not read full message")
+		return
+	}
+	remainderReader := bytes.NewReader(remainder)
+
 	// Join the header bytes with the remaining bytes.
-	go api.optimisticV2SlowPath(io.MultiReader(&buf, r), v2SlowPathOpts{
+	go api.optimisticV2SlowPath(io.MultiReader(&buf, remainderReader), v2SlowPathOpts{
 		header:                &header,
 		payload:               payload,
 		receivedAt:            receivedAt,
