@@ -2174,39 +2174,39 @@ func (api *RelayAPI) handleSubmitNewBlockV2(w http.ResponseWriter, req *http.Req
 	}
 
 	// Prepare the response data
-	// getHeaderResponse, err := common.BuildGetHeaderResponseHeaderOnly(header.Message.Value, eph, api.blsSk, api.publicKey, api.opts.EthNetDetails.DomainBuilder)
-	// if err != nil {
-	// 	log.WithError(err).Error("could not sign builder bid")
-	// 	api.RespondError(w, http.StatusBadRequest, err.Error())
-	// 	return
-	// }
+	getHeaderResponse, err := common.BuildGetHeaderResponseHeaderOnly(header.Message.Value, eph, api.blsSk, api.publicKey, api.opts.EthNetDetails.DomainBuilder)
+	if err != nil {
+		log.WithError(err).Error("could not sign builder bid")
+		api.RespondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
-	// bidTrace := &common.BidTraceV2{
-	// 	BidTrace:    *header.Message,
-	// 	BlockNumber: header.ExecutionPayloadHeader.BlockNumber,
-	// }
+	bidTrace := &common.BidTraceV2{
+		BidTrace:    *header.Message,
+		BlockNumber: header.ExecutionPayloadHeader.BlockNumber,
+	}
 
-	//
-	// Save to Redis
-	//
-	// updateBidResult, err := api.redis.SaveBidAndUpdateTopBid(context.Background(), tx, bidTrace, payload, nil, getHeaderResponse, receivedAt, isCancellationEnabled, nil)
-	// if err != nil {
-	// 	log.WithError(err).Error("could not save bid and update top bids")
-	// 	api.RespondError(w, http.StatusInternalServerError, "failed saving and updating bid")
-	// 	return
-	// }
+	
+	Save to Redis
+	
+	updateBidResult, err := api.redis.SaveBidAndUpdateTopBid(context.Background(), tx, bidTrace, payload, nil, getHeaderResponse, receivedAt, isCancellationEnabled, nil)
+	if err != nil {
+		log.WithError(err).Error("could not save bid and update top bids")
+		api.RespondError(w, http.StatusInternalServerError, "failed saving and updating bid")
+		return
+	}
 
-	// Add fields to logs
-	// log = log.WithFields(logrus.Fields{
-	// 	"timestampAfterBidUpdate":    time.Now().UTC().UnixMilli(),
-	// 	"wasBidSavedInRedis":         updateBidResult.WasBidSaved,
-	// 	"wasTopBidUpdated":           updateBidResult.WasTopBidUpdated,
-	// 	"topBidValue":                updateBidResult.TopBidValue,
-	// 	"prevTopBidValue":            updateBidResult.PrevTopBidValue,
-	// 	"profileRedisSavePayloadUs":  updateBidResult.TimeSavePayload.Microseconds(),
-	// 	"profileRedisUpdateTopBidUs": updateBidResult.TimeUpdateTopBid.Microseconds(),
-	// 	"profileRedisUpdateFloorUs":  updateBidResult.TimeUpdateFloor.Microseconds(),
-	// })
+	Add fields to logs
+	log = log.WithFields(logrus.Fields{
+		"timestampAfterBidUpdate":    time.Now().UTC().UnixMilli(),
+		"wasBidSavedInRedis":         updateBidResult.WasBidSaved,
+		"wasTopBidUpdated":           updateBidResult.WasTopBidUpdated,
+		"topBidValue":                updateBidResult.TopBidValue,
+		"prevTopBidValue":            updateBidResult.PrevTopBidValue,
+		"profileRedisSavePayloadUs":  updateBidResult.TimeSavePayload.Microseconds(),
+		"profileRedisUpdateTopBidUs": updateBidResult.TimeUpdateTopBid.Microseconds(),
+		"profileRedisUpdateFloorUs":  updateBidResult.TimeUpdateFloor.Microseconds(),
+	})
 
 	eligibleAt := time.Now().UTC()
 
