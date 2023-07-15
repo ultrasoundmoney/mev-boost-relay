@@ -1,5 +1,3 @@
-// Stores execution payloads for later analysis while minimally slowing down
-// the bidding process.
 package api
 
 import (
@@ -10,14 +8,17 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// PayloadArchive stores execution payloads for later analysis while minimally
+// slowing down the bidding process.
 type PayloadArchive struct {
 	ns      INatsService
 	pubOpts nats.PubOpt
 }
 
 func NewPayloadArchive(ns INatsService) *PayloadArchive {
-	ns.AddStream(&nats.StreamConfig{
-		MaxAge:   time.Duration(1 * time.Hour),
+	//nolint:exhaustruct
+	_, err := ns.AddStream(&nats.StreamConfig{
+		MaxAge:   time.Hour,
 		MaxBytes: 4_000_000,
 		MaxMsgs:  120_000,
 		Name:     "payload-archive",

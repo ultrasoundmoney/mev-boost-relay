@@ -97,7 +97,6 @@ func BuildGetHeaderResponseHeaderOnly(value *uint256.Int, header *consensuscapel
 		},
 		Bellatrix: nil,
 	}, nil
-
 }
 
 func BuildGetPayloadResponse(payload *BuilderSubmitBlockRequest) (*GetPayloadResponse, error) {
