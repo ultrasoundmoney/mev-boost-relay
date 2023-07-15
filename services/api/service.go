@@ -117,11 +117,12 @@ type RelayAPIOpts struct {
 	ListenAddr  string
 	BlockSimURL string
 
-	BeaconClient beaconclient.IMultiBeaconClient
-	Datastore    *datastore.Datastore
-	Redis        *datastore.RedisCache
-	Memcached    *datastore.Memcached
-	DB           database.IDatabaseService
+	BeaconClient   beaconclient.IMultiBeaconClient
+	Datastore      *datastore.Datastore
+	Redis          *datastore.RedisCache
+	Memcached      *datastore.Memcached
+	DB             database.IDatabaseService
+	PayloadArchive *PayloadArchive
 
 	SecretKey *bls.SecretKey // used to sign bids (getHeader responses)
 
@@ -176,11 +177,12 @@ type RelayAPI struct {
 	srvStarted  uberatomic.Bool
 	srvShutdown uberatomic.Bool
 
-	beaconClient beaconclient.IMultiBeaconClient
-	datastore    *datastore.Datastore
-	redis        *datastore.RedisCache
-	memcached    *datastore.Memcached
-	db           database.IDatabaseService
+	beaconClient   beaconclient.IMultiBeaconClient
+	datastore      *datastore.Datastore
+	redis          *datastore.RedisCache
+	memcached      *datastore.Memcached
+	db             database.IDatabaseService
+	payloadArchive *PayloadArchive
 
 	headSlot     uberatomic.Uint64
 	genesisInfo  *beaconclient.GetGenesisResponse
@@ -207,6 +209,7 @@ type RelayAPI struct {
 	ffEnableCancellations        bool // whether to enable block builder cancellations
 	ffRegValContinueOnInvalidSig bool // whether to continue processing further validators if one fails
 	ffIgnorableValidationErrors  bool // whether to enable ignorable validation errors
+	ffDisableArchivePayloads     bool // whether to publish payloads to a message queue for archiving
 
 	payloadAttributes     map[string]payloadAttributesHelper // key:parentBlockHash
 	payloadAttributesLock sync.RWMutex
@@ -268,15 +271,16 @@ func NewRelayAPI(opts RelayAPIOpts) (api *RelayAPI, err error) {
 	}
 
 	api = &RelayAPI{
-		opts:         opts,
-		log:          opts.Log,
-		blsSk:        opts.SecretKey,
-		publicKey:    &publicKey,
-		datastore:    opts.Datastore,
-		beaconClient: opts.BeaconClient,
-		redis:        opts.Redis,
-		memcached:    opts.Memcached,
-		db:           opts.DB,
+		opts:           opts,
+		log:            opts.Log,
+		blsSk:          opts.SecretKey,
+		publicKey:      &publicKey,
+		datastore:      opts.Datastore,
+		beaconClient:   opts.BeaconClient,
+		redis:          opts.Redis,
+		memcached:      opts.Memcached,
+		db:             opts.DB,
+		payloadArchive: opts.PayloadArchive,
 
 		payloadAttributes: make(map[string]payloadAttributesHelper),
 
@@ -319,6 +323,11 @@ func NewRelayAPI(opts RelayAPIOpts) (api *RelayAPI, err error) {
 	if os.Getenv("ENABLE_IGNORABLE_VALIDATION_ERRORS") == "1" {
 		api.log.Warn("env: ENABLE_IGNORABLE_VALIDATION_ERRORS - some validation errors will be ignored")
 		api.ffIgnorableValidationErrors = true
+	}
+
+	if os.Getenv("DISABLE_ARCHIVE_PAYLOADS") == "1" {
+		api.log.Warn("env: DISABLE_ARCHIVE_PAYLOADS - disables archiving of execution payloads")
+		api.ffDisableArchivePayloads = true
 	}
 
 	return api, nil
@@ -606,6 +615,28 @@ func (api *RelayAPI) demoteBuilder(pubkey string, req *common.BuilderSubmitBlock
 			"bidTrace":                 req.Message,
 			"simError":                 simError,
 		}).Error("failed to save demotion to database")
+	}
+}
+
+func (api *RelayAPI) archivePayload(log *logrus.Entry, payload *common.BuilderSubmitBlockRequest) {
+	if api.payloadArchive == nil {
+		log.Warn("asked to archive payloads but payload archive is not configured")
+		return
+	}
+
+	if api.ffDisableArchivePayloads {
+		log.Debug("payload archiving disabled by feature flag")
+		return
+	}
+
+	if payload.Capella.ExecutionPayload == nil {
+		log.WithField("payload", payload).Debug("archiving payloads is only supported for Capealla payloads")
+		return
+	}
+
+	err := api.payloadArchive.PublishPayload(payload.Message().Slot, payload.Capella.ExecutionPayload)
+	if err != nil {
+		log.WithError(err).Error("failed to archive accepted payload")
 	}
 }
 
@@ -1775,6 +1806,8 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 		if err != nil {
 			log.WithError(err).Error("failed to upsert block-builder-entry")
 		}
+
+		go api.archivePayload(log, payload)
 	}()
 
 	// Grab floor bid value
@@ -2368,6 +2401,8 @@ func (api *RelayAPI) optimisticV2SlowPath(r io.Reader, v2Opts v2SlowPathOpts) {
 		if err != nil {
 			log.WithError(err).Error("failed to upsert block-builder-entry")
 		}
+
+		go api.archivePayload(log, payload)
 	}()
 
 	// Simulate the block submission and save to db
