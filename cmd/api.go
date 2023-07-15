@@ -88,6 +88,9 @@ var apiCmd = &cobra.Command{
 		}
 		log.Infof("boost-relay %s", Version)
 
+		if network == "" {
+			log.Fatalf("NETWORK env var or --network flag must be specified")
+		}
 		networkInfo, err := common.NewEthNetworkDetails(network)
 		if err != nil {
 			log.WithError(err).Fatalf("error getting network details")
