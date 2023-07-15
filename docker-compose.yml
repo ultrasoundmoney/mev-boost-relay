@@ -29,6 +29,15 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: postgres
 
+  nats:
+    image: nats:latest
+    command: ["-js", "-m", "8222"]
+    restart: always
+    ports:
+      - "4222:4222"
+      - "6222:6222"
+      - "8222:8222"
+
   adminer:
     image: adminer
     restart: always
