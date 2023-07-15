@@ -15,9 +15,9 @@ type PayloadArchive struct {
 	pubOpts nats.PubOpt
 }
 
-func NewPayloadArchive(ns INatsService) *PayloadArchive {
+func NewPayloadArchive(ns INatsService) (*PayloadArchive, error) {
 	//nolint:exhaustruct
-	_, err := ns.AddStream(&nats.StreamConfig{
+	_, err := ns.UpsertStream(&nats.StreamConfig{
 		MaxAge:   time.Hour,
 		MaxBytes: 4_000_000,
 		MaxMsgs:  120_000,
@@ -26,13 +26,16 @@ func NewPayloadArchive(ns INatsService) *PayloadArchive {
 		Retention: nats.WorkQueuePolicy,
 		Subjects:  []string{"payload-archive"},
 	})
+	if err != nil {
+		return nil, err
+	}
 
 	return &PayloadArchive{
 		ns: ns,
 		// We don't care to know if the message was acknowledged by a consumer
 		// or not, only to publish it onto the stream.
 		pubOpts: nats.AckWait(0),
-	}
+	}, nil
 }
 
 func (p *PayloadArchive) PublishPayload(slot uint64, payload *capella.ExecutionPayload) error {

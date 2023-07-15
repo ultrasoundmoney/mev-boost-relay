@@ -159,7 +159,10 @@ var apiCmd = &cobra.Command{
 			}
 			log.Infof("Connected to message queue at %s", natsURI)
 
-			payloadArchive = api.NewPayloadArchive(ns)
+			payloadArchive, err = api.NewPayloadArchive(ns)
+			if err != nil {
+				log.WithError(err).Fatal("Failed to create payload archive")
+			}
 			log.Infof("PayloadArchive enabled, execution payloads will be published to message queue")
 		} else {
 			log.Warn("No NATS flag, execution payloads will not be published to message queue")
