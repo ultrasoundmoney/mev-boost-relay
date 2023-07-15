@@ -33,7 +33,7 @@ func (m *mockNatsService) OnShutdown() error {
 	return args.Error(0)
 }
 
-func (m *mockNatsService) AddStream(config *nats.StreamConfig) (*nats.StreamInfo, error) {
+func (m *mockNatsService) UpsertStream(config *nats.StreamConfig) (*nats.StreamInfo, error) {
 	args := m.Called(config)
 	return nil, args.Error(0)
 }
@@ -51,10 +51,11 @@ func TestPublishPayload(t *testing.T) {
 		Subjects:  []string{"payload-archive"},
 	}
 
-	natsService.On("AddStream", &streamConfig).Return(nil)
+	natsService.On("UpsertStream", &streamConfig).Return(nil)
 
 	// Create the PayloadArchive with the mock NatsService
-	payloadArchive := NewPayloadArchive(natsService)
+	payloadArchive, err := NewPayloadArchive(natsService)
+	require.NoError(t, err)
 
 	// Prepare a payload to publish
 	payload := capella.ExecutionPayload{

@@ -8,9 +8,9 @@ import (
 // functionality used by its consuming code. Uses an interface for easy
 // testing.
 type INatsService interface {
-	AddStream(config *nats.StreamConfig) (*nats.StreamInfo, error)
 	LastError() error
 	Publish(subject string, data []byte, opts nats.PubOpt) error
+	UpsertStream(config *nats.StreamConfig) (*nats.StreamInfo, error)
 }
 
 type NatsService struct {
@@ -45,6 +45,21 @@ func (n *NatsService) LastError() error {
 	return n.nc.LastError()
 }
 
-func (n *NatsService) AddStream(config *nats.StreamConfig) (*nats.StreamInfo, error) {
-	return n.js.AddStream(config)
+// UpsertStream creates a stream if it doesn't exist, or updates it if it does.
+func (n *NatsService) UpsertStream(config *nats.StreamConfig) (*nats.StreamInfo, error) {
+	var streamInfo *nats.StreamInfo
+	var err error
+
+	streamInfo, err = n.js.AddStream(config)
+
+	// Check if error is stream exists error
+	if err != nil && err.Error() == "409" {
+		// Stream exists, so update it
+		streamInfo, err = n.js.UpdateStream(config)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return streamInfo, nil
 }
