@@ -43,7 +43,7 @@ func TestPublishPayload(t *testing.T) {
 	natsService := new(mockNatsService)
 
 	streamConfig := nats.StreamConfig{
-		MaxAge:    time.Duration(1 * time.Hour),
+		MaxAge:    time.Hour,
 		MaxBytes:  4_000_000,
 		MaxMsgs:   120_000,
 		Name:      "payload-archive",

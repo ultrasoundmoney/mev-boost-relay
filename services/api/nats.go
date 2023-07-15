@@ -1,12 +1,12 @@
-// Manages the connection to the NATS server and provides only the
-// functionality used by its consuming code. Uses an interface for easy
-// testing.
 package api
 
 import (
 	"github.com/nats-io/nats.go"
 )
 
+// INatsService manages the connection to the NATS server and provides only the
+// functionality used by its consuming code. Uses an interface for easy
+// testing.
 type INatsService interface {
 	AddStream(config *nats.StreamConfig) (*nats.StreamInfo, error)
 	LastError() error
@@ -23,7 +23,6 @@ func NewNatsService(natsURI string) (*NatsService, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	js, err := nc.JetStream()
 	if err != nil {
 		return nil, err
