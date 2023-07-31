@@ -1,33 +1,33 @@
 # On graceful service startup and shutdown, and zero-downtime deployments
 
-2023-06-19, by [@metachris](https://twitter.com/metachris)
+2023-06-19, by [@metachris](https://twitter.com/metachris), [@0x416e746f6e](https://github.com/0x416e746f6e)
 
 ---
 
 This document explains the details of API service startup and shutdown behavior, in particular related to:
+- Zero-downtime deployments
 - Proposer API
   - Needing data before being able to handle `getPayload` requests (known validators)
-  - Draining getPayload and other requests before shutting down
-- Zero-downtime deployments
+  - Draining requests before shutting down
 
 ---
 
-### TL;DR
+## TL;DR
 
-- We've added two endpoints: `/livez` and `/readyz` (per [k8s docs](https://kubernetes.io/docs/reference/using-api/health-checks/)):
+- We've added two endpoints: `/livez` and `/readyz` (per [k8s docs](https://kubernetes.io/docs/reference/using-api/health-checks/)) in [#469](https://github.com/flashbots/mev-boost-relay/pull/469):
 - On startup:
     - `/livez` is immediately available and positive, and will stay so until the service is shut down
     - `/readyz` starts negative, until all information is loaded to safely process requests (known validators for the proposer API)
     - Configure your orchestration tooling to route traffic to the service only if and when `/readyz` is positive!
 - On shutdown:
     - `/readyz` returns a negative result
-    - Wait a little and drain all requests
+    - Wait a little and drain all requests (by default, 30 sec -- make sure your orchestration graceful shutdown period is greater than that (i.e. set to 60 sec))
     - Stop the webserver, and stop the program
 - See also: https://kubernetes.io/docs/reference/using-api/health-checks/
 
 ---
 
-### Kubernetes background about health-checks
+## Kubernetes background about health-checks
 
 There are three types of health-checks (probes): [k8s docs](https://kubernetes.io/docs/reference/using-api/health-checks/)
 
@@ -55,7 +55,7 @@ There are three types of health-checks (probes): [k8s docs](https://kubernetes.i
 
 ---
 
-### API Startup + Shutdown Sequence
+## API Startup + Shutdown Sequence
 
 The proposer API needs to load all known validators before serving traffic, otherwise, there's a risk of missed slots due to `getPayload` not having all the information it needs to succeed.
 
@@ -79,35 +79,38 @@ At this point, the pod is operational and can service traffic.
 
 ---
 
-### Example k8s + AWS configuration
+## Example k8s + AWS configuration
 
 ```yaml
  metadata:
    name: boost-relay-api-proposer
-+  annotations:
-+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: 10
-+    alb.ingress.kubernetes.io/healthcheck-path: /readyz
-+    alb.ingress.kubernetes.io/healthcheck-port: 8080
+   annotations:
+     alb.ingress.kubernetes.io/healthcheck-interval-seconds: "10"
+     alb.ingress.kubernetes.io/healthcheck-path: /readyz
+     alb.ingress.kubernetes.io/healthcheck-port: "8080"
  spec:
   template:
     spec:
+      terminationGracePeriodSeconds: 60
       containers:
         - name: boost-relay-api-proposer
-+          livenessProbe:
-+            httpGet:
-+              path: /livez
-+              port: 8080
-+              initialDelaySeconds: 5
-+          readinessProbe:
-+            httpGet:
-+              path: /readyz
-+              port: 8080
-+              initialDelaySeconds: 30
+          livenessProbe:
+            initialDelaySeconds: 5
+            failureThreshold: 2
+            httpGet:
+              path: /livez
+              port: 8080
+          readinessProbe:
+            initialDelaySeconds: 5
+            failureThreshold: 2
+            httpGet:
+              path: /readyz
+              port: 8080
 ```
 
 ---
 
-See also:
+## See also
 
 - https://kubernetes.io/docs/reference/using-api/health-checks/
 - https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
