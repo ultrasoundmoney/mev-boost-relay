@@ -15,6 +15,11 @@ type PayloadArchive struct {
 	pubOpts nats.PubOpt
 }
 
+type ExecutionPayloadArchiveBundle struct {
+	Slot    uint64
+	Payload *capella.ExecutionPayload
+}
+
 func NewPayloadArchive(ns INatsService) (*PayloadArchive, error) {
 	//nolint:exhaustruct
 	_, err := ns.UpsertStream(&nats.StreamConfig{
@@ -39,7 +44,11 @@ func NewPayloadArchive(ns INatsService) (*PayloadArchive, error) {
 }
 
 func (p *PayloadArchive) PublishPayload(slot uint64, payload *capella.ExecutionPayload) error {
-	msg, err := json.Marshal(payload)
+	msg, err := json.Marshal(&ExecutionPayloadArchiveBundle{
+		Slot:    slot,
+		Payload: payload,
+	})
+
 	if err != nil {
 		return err
 	}
