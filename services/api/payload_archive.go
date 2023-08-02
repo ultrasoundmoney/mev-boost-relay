@@ -16,8 +16,8 @@ type PayloadArchive struct {
 }
 
 type ExecutionPayloadArchiveBundle struct {
-	Slot    uint64
-	Payload *capella.ExecutionPayload
+	Slot    uint64                    `json:"slot"`
+	Payload *capella.ExecutionPayload `json:"payload"`
 }
 
 func NewPayloadArchive(ns INatsService) (*PayloadArchive, error) {
