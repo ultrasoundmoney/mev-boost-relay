@@ -543,6 +543,8 @@ func (r *RedisCache) SaveBidAndUpdateTopBid(ctx context.Context, pipeliner redis
 	if err != nil {
 		return state, err
 	}
+	// An Exec happens in _updateTopBid.
+	state.WasBidSaved = true
 	state.IsNewTopBid = payload.Value().Cmp(state.TopBidValue) == 0
 
 	// Record time needed to update top bid
@@ -562,7 +564,6 @@ func (r *RedisCache) SaveBidAndUpdateTopBid(ctx context.Context, pipeliner redis
 	if err != nil {
 		return state, err
 	}
-	state.WasBidSaved = true
 
 	wasCopied, copyErr := c.Result()
 	if copyErr != nil {
