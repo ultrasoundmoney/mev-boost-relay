@@ -515,7 +515,6 @@ func (r *RedisCache) SaveBidAndUpdateTopBid(ctx context.Context, pipeliner redis
 	if err != nil {
 		return state, err
 	}
-	state.WasBidSaved = true
 	builderBids.bidValues[payload.BuilderPubkey().String()] = payload.Value()
 
 	// Record time needed to save bid
@@ -563,6 +562,7 @@ func (r *RedisCache) SaveBidAndUpdateTopBid(ctx context.Context, pipeliner redis
 	if err != nil {
 		return state, err
 	}
+	state.WasBidSaved = true
 
 	wasCopied, copyErr := c.Result()
 	if copyErr != nil {
