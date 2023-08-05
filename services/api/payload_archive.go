@@ -24,8 +24,8 @@ func NewPayloadArchive(ns INatsService) (*PayloadArchive, error) {
 	//nolint:exhaustruct
 	_, err := ns.UpsertStream(&nats.StreamConfig{
 		MaxAge:   time.Hour,
-		MaxBytes: 4_000_000,
-		MaxMsgs:  120_000,
+		MaxBytes: 240 * 1024 * 1024 * 1024, // 480_000 * 0.5 MiB max per message. 240 GB in bytes.
+		MaxMsgs:  480_000,                  // max 1600 payloads per slot * 5 slots per minute * 60 minutes per hour = 480_000.
 		Name:     "payload-archive",
 		// After messages are consumed, they can be dropped from the stream.
 		Retention: nats.WorkQueuePolicy,
