@@ -48,7 +48,6 @@ func (p *PayloadArchive) PublishPayload(slot uint64, payload *capella.ExecutionP
 		Slot:    slot,
 		Payload: payload,
 	})
-
 	if err != nil {
 		return err
 	}
