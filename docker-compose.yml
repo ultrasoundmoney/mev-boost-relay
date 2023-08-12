@@ -29,15 +29,6 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: postgres
 
-  nats:
-    image: nats:latest
-    command: ["-js", "-m", "8222"]
-    restart: always
-    ports:
-      - "4222:4222"
-      - "6222:6222"
-      - "8222:8222"
-
   adminer:
     image: adminer
     restart: always
@@ -57,10 +48,8 @@ services:
       - BEACON_URIS
       - REDIS_URI=redis:6379
       - POSTGRES_DSN=postgresql://postgres:postgres@db/postgres?sslmode=disable
-      - NATS_URI=nats://nats:4222
     depends_on:
       - db
       - redis
-      - nats
     ports:
       - "8080:8080"

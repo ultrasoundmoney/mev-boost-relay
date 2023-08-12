@@ -42,7 +42,6 @@ var (
 	apiInternalAPI  bool
 	apiProposerAPI  bool
 	apiLogTag       string
-	natsURI         string
 )
 
 func init() {
@@ -56,12 +55,12 @@ func init() {
 	apiCmd.Flags().StringSliceVar(&beaconNodeURIs, "beacon-uris", defaultBeaconURIs, "beacon endpoints")
 	apiCmd.Flags().StringVar(&redisURI, "redis-uri", defaultRedisURI, "redis uri")
 	apiCmd.Flags().StringVar(&redisReadonlyURI, "redis-readonly-uri", defaultRedisReadonlyURI, "redis readonly uri")
+	apiCmd.Flags().StringVar(&redisArchiveURI, "redis-archive-uri", defaultRedisArchiveURI, "redis block submission archive uri")
 	apiCmd.Flags().StringVar(&postgresDSN, "db", defaultPostgresDSN, "PostgreSQL DSN")
 	apiCmd.Flags().StringSliceVar(&memcachedURIs, "memcached-uris", defaultMemcachedURIs,
 		"Enable memcached, typically used as secondary backup to Redis for redundancy")
 	apiCmd.Flags().StringVar(&apiSecretKey, "secret-key", apiDefaultSecretKey, "secret key for signing bids")
 	apiCmd.Flags().StringVar(&apiBlockSimURL, "blocksim", apiDefaultBlockSim, "URL for block simulator")
-	apiCmd.Flags().StringVar(&natsURI, "nats-uri", common.GetEnv("NATS_URI", ""), "NATS URI to enable message queue")
 	apiCmd.Flags().StringVar(&network, "network", defaultNetwork, "Which network to use")
 
 	apiCmd.Flags().BoolVar(&apiPprofEnabled, "pprof", apiDefaultPprofEnabled, "enable pprof API")
@@ -112,12 +111,14 @@ var apiCmd = &cobra.Command{
 		beaconClient := beaconclient.NewMultiBeaconClient(log, beaconInstances)
 
 		// Connect to Redis
-		if redisReadonlyURI == "" {
-			log.Infof("Connecting to Redis at %s ...", redisURI)
-		} else {
-			log.Infof("Connecting to Redis at %s / readonly: %s ...", redisURI, redisReadonlyURI)
+		log.Infof("Connecting to Redis at %s ...", redisURI)
+		if redisReadonlyURI != "" {
+			log.Infof("Connecting to readonly Redis at %s ...", redisReadonlyURI)
 		}
-		redis, err := datastore.NewRedisCache(networkInfo.Name, redisURI, redisReadonlyURI)
+		if redisArchiveURI != "" {
+			log.Infof("Connecting to block submission archive Redis at %s ...", redisArchiveURI)
+		}
+		redis, err := datastore.NewRedisCache(networkInfo.Name, redisURI, redisReadonlyURI, redisArchiveURI)
 		if err != nil {
 			log.WithError(err).Fatalf("Failed to connect to Redis at %s", redisURI)
 		}
@@ -149,36 +150,16 @@ var apiCmd = &cobra.Command{
 			log.WithError(err).Fatalf("Failed setting up prod datastore")
 		}
 
-		var ns *api.NatsService
-		var payloadArchive *api.PayloadArchive
-		if natsURI != "" {
-			log.Infof("Connecting to message queue at %s", natsURI)
-			ns, err = api.NewNatsService(natsURI)
-			if err != nil {
-				log.WithError(err).Fatal("Failed to connect to message queue at", natsURI)
-			}
-			log.Infof("Connected to message queue at %s", natsURI)
-
-			payloadArchive, err = api.NewPayloadArchive(ns)
-			if err != nil {
-				log.WithError(err).Fatal("Failed to create payload archive")
-			}
-			log.Infof("PayloadArchive enabled, execution payloads will be published to message queue")
-		} else {
-			log.Warn("No NATS flag, execution payloads will not be published to message queue")
-		}
-
 		opts := api.RelayAPIOpts{
-			Log:            log,
-			ListenAddr:     apiListenAddr,
-			BeaconClient:   beaconClient,
-			Datastore:      ds,
-			Redis:          redis,
-			Memcached:      mem,
-			DB:             db,
-			EthNetDetails:  *networkInfo,
-			BlockSimURL:    apiBlockSimURL,
-			PayloadArchive: payloadArchive,
+			Log:           log,
+			ListenAddr:    apiListenAddr,
+			BeaconClient:  beaconClient,
+			Datastore:     ds,
+			Redis:         redis,
+			Memcached:     mem,
+			DB:            db,
+			EthNetDetails: *networkInfo,
+			BlockSimURL:   apiBlockSimURL,
 
 			BlockBuilderAPI: apiBuilderAPI,
 			DataAPI:         apiDataAPI,

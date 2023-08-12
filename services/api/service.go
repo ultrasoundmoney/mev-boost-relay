@@ -117,12 +117,11 @@ type RelayAPIOpts struct {
 	ListenAddr  string
 	BlockSimURL string
 
-	BeaconClient   beaconclient.IMultiBeaconClient
-	Datastore      *datastore.Datastore
-	Redis          *datastore.RedisCache
-	Memcached      *datastore.Memcached
-	DB             database.IDatabaseService
-	PayloadArchive *PayloadArchive
+	BeaconClient beaconclient.IMultiBeaconClient
+	Datastore    *datastore.Datastore
+	Redis        *datastore.RedisCache
+	Memcached    *datastore.Memcached
+	DB           database.IDatabaseService
 
 	SecretKey *bls.SecretKey // used to sign bids (getHeader responses)
 
@@ -177,12 +176,11 @@ type RelayAPI struct {
 	srvStarted  uberatomic.Bool
 	srvShutdown uberatomic.Bool
 
-	beaconClient   beaconclient.IMultiBeaconClient
-	datastore      *datastore.Datastore
-	redis          *datastore.RedisCache
-	memcached      *datastore.Memcached
-	db             database.IDatabaseService
-	payloadArchive *PayloadArchive
+	beaconClient beaconclient.IMultiBeaconClient
+	datastore    *datastore.Datastore
+	redis        *datastore.RedisCache
+	memcached    *datastore.Memcached
+	db           database.IDatabaseService
 
 	headSlot     uberatomic.Uint64
 	genesisInfo  *beaconclient.GetGenesisResponse
@@ -271,16 +269,15 @@ func NewRelayAPI(opts RelayAPIOpts) (api *RelayAPI, err error) {
 	}
 
 	api = &RelayAPI{
-		opts:           opts,
-		log:            opts.Log,
-		blsSk:          opts.SecretKey,
-		publicKey:      &publicKey,
-		datastore:      opts.Datastore,
-		beaconClient:   opts.BeaconClient,
-		redis:          opts.Redis,
-		memcached:      opts.Memcached,
-		db:             opts.DB,
-		payloadArchive: opts.PayloadArchive,
+		opts:         opts,
+		log:          opts.Log,
+		blsSk:        opts.SecretKey,
+		publicKey:    &publicKey,
+		datastore:    opts.Datastore,
+		beaconClient: opts.BeaconClient,
+		redis:        opts.Redis,
+		memcached:    opts.Memcached,
+		db:           opts.DB,
 
 		payloadAttributes: make(map[string]payloadAttributesHelper),
 
@@ -618,23 +615,41 @@ func (api *RelayAPI) demoteBuilder(pubkey string, req *common.BuilderSubmitBlock
 	}
 }
 
-func (api *RelayAPI) archivePayload(log *logrus.Entry, payload *common.BuilderSubmitBlockRequest) {
-	if api.payloadArchive == nil {
-		log.Warn("asked to archive payloads but payload archive is not configured")
+type BlockSubmissionArchiveEntry struct {
+	BuilderPubkey    string                        `json:"builder_pubkey"`
+	EligibleAt       time.Time                     `json:"eligible_at"`
+	ExecutionPayload *capellaspec.ExecutionPayload `json:"execution_payload"`
+	ProposerPubkey   string                        `json:"proposer_pubkey"`
+	ReceivedAt       time.Time                     `json:"received_at"`
+	Slot             uint64                        `json:"slot"`
+	Value            *big.Int                      `json:"value"`
+}
+
+func (api *RelayAPI) archiveBlockSubmission(log *logrus.Entry, eligibleAt time.Time, receivedAt time.Time, reqContentType string, requestPayloadBytes []byte, executionPayload *common.BuilderSubmitBlockRequest) {
+	if executionPayload.Capella.ExecutionPayload == nil {
+		log.WithField("payload", executionPayload).Debug("archiving payloads is only supported for Capella payloads")
 		return
 	}
 
-	if api.ffDisableArchivePayloads {
-		log.Debug("payload archiving disabled by feature flag")
-		return
+	payloadBytes := []byte{}
+	if reqContentType == "json" {
+		payloadBytes = requestPayloadBytes
+	} else {
+		payload, err := json.Marshal(executionPayload)
+		if err != nil {
+			log.WithError(err).Error("failed to marshal execution payload")
+			return
+		}
+		payloadBytes = payload
 	}
 
-	if payload.Capella.ExecutionPayload == nil {
-		log.WithField("payload", payload).Debug("archiving payloads is only supported for Capealla payloads")
-		return
+	submissionArchiveLog := []interface{}{
+		"eligible_at", fmt.Sprint(eligibleAt.UnixMilli()),
+		"received_at", fmt.Sprint(receivedAt.UnixMilli()),
+		"payload", payloadBytes,
 	}
 
-	err := api.payloadArchive.PublishPayload(payload.Message().Slot, payload.Capella.ExecutionPayload)
+	err := api.redis.ArchiveBlockSubmission(submissionArchiveLog)
 	if err != nil {
 		log.WithError(err).Error("failed to archive accepted payload")
 	}
@@ -1606,11 +1621,13 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	}
 
 	payload := new(common.BuilderSubmitBlockRequest)
+	reqContentType := ""
 
 	// Check for SSZ encoding
 	contentType := req.Header.Get("Content-Type")
 	if contentType == "application/octet-stream" {
-		log = log.WithField("reqContentType", "ssz")
+		reqContentType = "ssz"
+		log = log.WithField("reqContentType", reqContentType)
 		payload.Capella = new(builderCapella.SubmitBlockRequest)
 		if err = payload.Capella.UnmarshalSSZ(requestPayloadBytes); err != nil {
 			log.WithError(err).Warn("could not decode payload - SSZ")
@@ -1621,11 +1638,13 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 				api.RespondError(w, http.StatusBadRequest, err.Error())
 				return
 			}
-			log = log.WithField("reqContentType", "json")
+			reqContentType = "json"
+			log = log.WithField("reqContentType", reqContentType)
 		} else {
 			log.Debug("received ssz-encoded payload")
 		}
 	} else {
+		reqContentType = "json"
 		log = log.WithField("reqContentType", "json")
 		if err := json.Unmarshal(requestPayloadBytes, payload); err != nil {
 			log.WithError(err).Warn("could not decode payload - JSON")
@@ -1834,7 +1853,9 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 			log.WithError(err).Error("failed to upsert block-builder-entry")
 		}
 
-		go api.archivePayload(log, payload)
+		if !api.ffDisableArchivePayloads {
+			go api.archiveBlockSubmission(log, eligibleAt, receivedAt, reqContentType, requestPayloadBytes, payload)
+		}
 	}()
 
 	// Grab floor bid value
@@ -2429,7 +2450,9 @@ func (api *RelayAPI) optimisticV2SlowPath(r io.Reader, v2Opts v2SlowPathOpts) {
 			log.WithError(err).Error("failed to upsert block-builder-entry")
 		}
 
-		go api.archivePayload(log, payload)
+		if !api.ffDisableArchivePayloads {
+			go api.archiveBlockSubmission(log, v2Opts.eligibleAt, v2Opts.receivedAt, "", nil, payload)
+		}
 	}()
 
 	// Simulate the block submission and save to db

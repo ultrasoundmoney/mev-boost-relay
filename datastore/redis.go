@@ -38,6 +38,8 @@ var (
 	redisReadTimeoutSec     = cli.GetEnvInt("REDIS_READ_TIMEOUT_SEC", 0)     // 0 means use default (3 sec)
 	redisPoolTimeoutSec     = cli.GetEnvInt("REDIS_POOL_TIMEOUT_SEC", 0)     // 0 means use default (ReadTimeout + 1 sec)
 	redisWriteTimeoutSec    = cli.GetEnvInt("REDIS_WRITE_TIMEOUT_SEC", 0)    // 0 means use default (3 seconds)
+
+	blockSubmissionArchiveStreamMb = cli.GetEnvInt("BLOCK_SUBMISSION_ARCHIVE_STREAM_MB", 1000)
 )
 
 func PubkeyHexToLowerStr(pk boostTypes.PubkeyHex) string {
@@ -81,6 +83,7 @@ func connectRedis(redisURI string) (*redis.Client, error) {
 
 type RedisCache struct {
 	client         *redis.Client
+	archiveClient  *redis.Client
 	readonlyClient *redis.Client
 
 	// prefixes (keys generated with a function)
@@ -97,15 +100,18 @@ type RedisCache struct {
 	// keys
 	keyValidatorRegistrationTimestamp string
 
-	keyRelayConfig        string
-	keyStats              string
-	keyProposerDuties     string
-	keyBlockBuilderStatus string
-	keyLastSlotDelivered  string
-	keyLastHashDelivered  string
+	keyRelayConfig                  string
+	keyStats                        string
+	keyProposerDuties               string
+	keyBlockBuilderStatus           string
+	keyLastSlotDelivered            string
+	keyLastHashDelivered            string
+	keyBlockSubmissionArchiveStream string
+
+	blockSubmissionArchiveMaxLen int64
 }
 
-func NewRedisCache(prefix, redisURI, readonlyURI string) (*RedisCache, error) {
+func NewRedisCache(prefix, redisURI, readonlyURI string, archiveURI string) (*RedisCache, error) {
 	client, err := connectRedis(redisURI)
 	if err != nil {
 		return nil, err
@@ -119,7 +125,19 @@ func NewRedisCache(prefix, redisURI, readonlyURI string) (*RedisCache, error) {
 		}
 	}
 
+	// By default we use the same client for block submission archiving, unless
+	// a different URI is provided. This may be desirable if the lowest
+	// possible latency is desired on the default client.
+	archiveClient := client
+	if archiveURI != "" {
+		archiveClient, err = connectRedis(archiveURI)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return &RedisCache{
+		archiveClient:  archiveClient,
 		client:         client,
 		readonlyClient: roClient,
 
@@ -142,6 +160,8 @@ func NewRedisCache(prefix, redisURI, readonlyURI string) (*RedisCache, error) {
 		keyBlockBuilderStatus: fmt.Sprintf("%s/%s:block-builder-status", redisPrefix, prefix),
 		keyLastSlotDelivered:  fmt.Sprintf("%s/%s:last-slot-delivered", redisPrefix, prefix),
 		keyLastHashDelivered:  fmt.Sprintf("%s/%s:last-hash-delivered", redisPrefix, prefix),
+
+		blockSubmissionArchiveMaxLen: calculateBlockSubmissionArchiveMaxLen(),
 	}, nil
 }
 
@@ -735,4 +755,29 @@ func (r *RedisCache) NewPipeline() redis.Pipeliner { //nolint:ireturn,nolintlint
 
 func (r *RedisCache) NewTxPipeline() redis.Pipeliner { //nolint:ireturn
 	return r.client.TxPipeline()
+}
+
+// Bundles contain 1200 messages on average and messages are about 160
+// KiB in size. By default, we'd like to use at most 1 GiB of Redis
+// memory with a 50% buffer to account for messages and bundles being
+// much bigger in the worst case. 1_000_000 * 0.5 / 160 = 3_125
+// messages are held in memory, ~2.6 slots or 31.25 seconds of message
+// buffer. Not a lot! Expect to lose some messages if your archiving
+// service is at times unavailable for more than 31s.
+func calculateBlockSubmissionArchiveMaxLen() int64 {
+	archiveStreamAverageMessageSize := 160 * 1024
+	archiveStreamBytes := blockSubmissionArchiveStreamMb * 1024 * 1024
+	archiveStreamBufferFactorInv := 2
+	return int64((archiveStreamBytes / archiveStreamBufferFactorInv) / archiveStreamAverageMessageSize)
+}
+
+func (r *RedisCache) ArchiveBlockSubmission(payload []interface{}) error {
+	return r.client.XAdd(context.Background(), &redis.XAddArgs{
+		MaxLen: r.blockSubmissionArchiveMaxLen,
+		// Efficiency is a concern here, we make sure we have more space than
+		// needed in most cases and use the more efficient approximate max len.
+		Approx: true,
+		Stream: "block-submission-archive",
+		Values: payload,
+	}).Err()
 }
