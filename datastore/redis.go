@@ -100,13 +100,12 @@ type RedisCache struct {
 	// keys
 	keyValidatorRegistrationTimestamp string
 
-	keyRelayConfig                  string
-	keyStats                        string
-	keyProposerDuties               string
-	keyBlockBuilderStatus           string
-	keyLastSlotDelivered            string
-	keyLastHashDelivered            string
-	keyBlockSubmissionArchiveStream string
+	keyRelayConfig        string
+	keyStats              string
+	keyProposerDuties     string
+	keyBlockBuilderStatus string
+	keyLastSlotDelivered  string
+	keyLastHashDelivered  string
 
 	blockSubmissionArchiveMaxLen int64
 }
