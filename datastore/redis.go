@@ -771,7 +771,7 @@ func calculateBlockSubmissionArchiveMaxLen() int64 {
 }
 
 func (r *RedisCache) ArchiveBlockSubmission(payload []interface{}) error {
-	return r.client.XAdd(context.Background(), &redis.XAddArgs{
+	return r.archiveClient.XAdd(context.Background(), &redis.XAddArgs{
 		MaxLen: r.blockSubmissionArchiveMaxLen,
 		// Efficiency is a concern here, we make sure we have more space than
 		// needed in most cases and use the more efficient approximate max len.
