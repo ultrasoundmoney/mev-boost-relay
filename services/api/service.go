@@ -200,14 +200,14 @@ type RelayAPI struct {
 	getPayloadCallsInFlight sync.WaitGroup
 
 	// Feature flags
-	ffForceGetHeader204          bool
-	ffDisableLowPrioBuilders     bool
-	ffDisablePayloadDBStorage    bool // disable storing the execution payloads in the database
-	ffLogInvalidSignaturePayload bool // log payload if getPayload signature validation fails
-	ffEnableCancellations        bool // whether to enable block builder cancellations
-	ffRegValContinueOnInvalidSig bool // whether to continue processing further validators if one fails
-	ffIgnorableValidationErrors  bool // whether to enable ignorable validation errors
-	ffDisableArchivePayloads     bool // whether to publish payloads to a message queue for archiving
+	ffForceGetHeader204              bool
+	ffDisableLowPrioBuilders         bool
+	ffDisablePayloadDBStorage        bool // disable storing the execution payloads in the database
+	ffLogInvalidSignaturePayload     bool // log payload if getPayload signature validation fails
+	ffEnableCancellations            bool // whether to enable block builder cancellations
+	ffRegValContinueOnInvalidSig     bool // whether to continue processing further validators if one fails
+	ffIgnorableValidationErrors      bool // whether to enable ignorable validation errors
+	ffDisableArchiveBlockSubmissions bool // whether to publish block submissions to a message queue for archiving
 
 	payloadAttributes     map[string]payloadAttributesHelper // key:parentBlockHash
 	payloadAttributesLock sync.RWMutex
@@ -322,9 +322,9 @@ func NewRelayAPI(opts RelayAPIOpts) (api *RelayAPI, err error) {
 		api.ffIgnorableValidationErrors = true
 	}
 
-	if os.Getenv("DISABLE_ARCHIVE_PAYLOADS") == "1" {
-		api.log.Warn("env: DISABLE_ARCHIVE_PAYLOADS - disables archiving of execution payloads")
-		api.ffDisableArchivePayloads = true
+	if os.Getenv("DISABLE_ARCHIVE_BLOCK_SUBMISSIONS") == "1" {
+		api.log.Warn("env: DISABLE_ARCHIVE_BLOCK_SUBMISSIONS - disables archiving of block submissions")
+		api.ffDisableArchiveBlockSubmissions = true
 	}
 
 	return api, nil
@@ -651,7 +651,7 @@ func (api *RelayAPI) archiveBlockSubmission(log *logrus.Entry, eligibleAt time.T
 
 	err := api.redis.ArchiveBlockSubmission(submissionArchiveLog)
 	if err != nil {
-		log.WithError(err).Error("failed to archive accepted payload")
+		log.WithError(err).Error("failed to archive accepted block submission")
 	}
 }
 
@@ -1853,7 +1853,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 			log.WithError(err).Error("failed to upsert block-builder-entry")
 		}
 
-		if !api.ffDisableArchivePayloads {
+		if !api.ffDisableArchiveBlockSubmissions {
 			go api.archiveBlockSubmission(log, eligibleAt, receivedAt, reqContentType, requestPayloadBytes, payload)
 		}
 	}()
@@ -2450,7 +2450,7 @@ func (api *RelayAPI) optimisticV2SlowPath(r io.Reader, v2Opts v2SlowPathOpts) {
 			log.WithError(err).Error("failed to upsert block-builder-entry")
 		}
 
-		if !api.ffDisableArchivePayloads {
+		if !api.ffDisableArchiveBlockSubmissions {
 			go api.archiveBlockSubmission(log, v2Opts.eligibleAt, v2Opts.receivedAt, "", nil, payload)
 		}
 	}()
