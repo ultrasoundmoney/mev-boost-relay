@@ -625,7 +625,7 @@ type BlockSubmissionArchiveEntry struct {
 	Value            *big.Int                      `json:"value"`
 }
 
-func (api *RelayAPI) archiveBlockSubmission(log *logrus.Entry, eligibleAt time.Time, receivedAt time.Time, reqContentType string, requestPayloadBytes []byte, executionPayload *common.BuilderSubmitBlockRequest) {
+func (api *RelayAPI) archiveBlockSubmission(log *logrus.Entry, eligibleAt time.Time, receivedAt time.Time, reqContentType string, requestPayloadBytes []byte, executionPayload *common.BuilderSubmitBlockRequest, responseCode int) {
 	if executionPayload.Capella.ExecutionPayload == nil {
 		log.WithField("payload", executionPayload).Debug("archiving payloads is only supported for Capella payloads")
 		return
@@ -647,6 +647,7 @@ func (api *RelayAPI) archiveBlockSubmission(log *logrus.Entry, eligibleAt time.T
 		"eligible_at", fmt.Sprint(eligibleAt.UnixMilli()),
 		"received_at", fmt.Sprint(receivedAt.UnixMilli()),
 		"payload", payloadBytes,
+		"status_code", responseCode,
 	}
 
 	err := api.redis.ArchiveBlockSubmission(submissionArchiveLog)
@@ -1567,6 +1568,7 @@ func (api *RelayAPI) handleBuilderGetValidators(w http.ResponseWriter, req *http
 func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Request) { //nolint:gocognit,maintidx
 	var pf common.Profile
 	var prevTime, nextTime time.Time
+	var responseCode int
 
 	headSlot := api.headSlot.Load()
 	receivedAt := time.Now().UTC()
@@ -1595,6 +1597,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	// If cancellations are disabled but builder requested it, return error
 	if isCancellationEnabled && !api.ffEnableCancellations {
 		log.Info("builder submitted with cancellations enabled, but feature flag is disabled")
+		responseCode = http.StatusBadRequest
 		api.RespondError(w, http.StatusBadRequest, "cancellations are disabled")
 		return
 	}
@@ -1607,6 +1610,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 		r, err = gzip.NewReader(req.Body)
 		if err != nil {
 			log.WithError(err).Warn("could not create gzip reader")
+			responseCode = http.StatusBadRequest
 			api.RespondError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -1616,6 +1620,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	requestPayloadBytes, err := io.ReadAll(limitReader)
 	if err != nil {
 		log.WithError(err).Warn("could not read payload")
+		responseCode = http.StatusBadRequest
 		api.RespondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -1635,6 +1640,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 			// SSZ decoding failed. try JSON as fallback (some builders used octet-stream for json before)
 			if err2 := json.Unmarshal(requestPayloadBytes, payload); err2 != nil {
 				log.WithError(fmt.Errorf("%w / %w", err, err2)).Warn("could not decode payload - SSZ or JSON")
+				responseCode = http.StatusBadRequest
 				api.RespondError(w, http.StatusBadRequest, err.Error())
 				return
 			}
@@ -1648,6 +1654,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 		log = log.WithField("reqContentType", "json")
 		if err := json.Unmarshal(requestPayloadBytes, payload); err != nil {
 			log.WithError(err).Warn("could not decode payload - JSON")
+			responseCode = http.StatusBadRequest
 			api.RespondError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -1672,6 +1679,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	})
 
 	if payload.Message() == nil || !payload.HasExecutionPayload() {
+		responseCode = http.StatusBadRequest
 		api.RespondError(w, http.StatusBadRequest, "missing parts of the payload")
 		return
 	}
@@ -1679,12 +1687,14 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	// TODO: add deneb support.
 	if payload.Capella == nil {
 		log.Info("rejecting submission - non capella payload for capella fork")
+		responseCode = http.StatusBadRequest
 		api.RespondError(w, http.StatusBadRequest, "not capella payload")
 		return
 	}
 
 	if payload.Slot() <= headSlot {
 		log.Info("submitNewBlock failed: submission for past slot")
+		responseCode = http.StatusBadRequest
 		api.RespondError(w, http.StatusBadRequest, "submission for past slot")
 		return
 	}
@@ -1708,6 +1718,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	expectedTimestamp := api.genesisInfo.Data.GenesisTime + (payload.Slot() * common.SecondsPerSlot)
 	if payload.Timestamp() != expectedTimestamp {
 		log.Warnf("incorrect timestamp. got %d, expected %d", payload.Timestamp(), expectedTimestamp)
+		responseCode = http.StatusBadRequest
 		api.RespondError(w, http.StatusBadRequest, fmt.Sprintf("incorrect timestamp. got %d, expected %d", payload.Timestamp(), expectedTimestamp))
 		return
 	}
@@ -1715,6 +1726,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	if builderEntry.status.IsBlacklisted {
 		log.Info("builder is blacklisted")
 		time.Sleep(200 * time.Millisecond)
+		responseCode = http.StatusOK
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -1723,6 +1735,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	if api.ffDisableLowPrioBuilders && !builderEntry.status.IsHighPrio {
 		log.Info("rejecting low-prio builder (ff-disable-low-prio-builders)")
 		time.Sleep(200 * time.Millisecond)
+		responseCode = http.StatusOK
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -1735,6 +1748,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	api.proposerDutiesLock.RUnlock()
 	if slotDuty == nil {
 		log.Warn("could not find slot duty")
+		responseCode = http.StatusBadRequest
 		api.RespondError(w, http.StatusBadRequest, "could not find slot duty")
 		return
 	} else if !strings.EqualFold(slotDuty.Entry.Message.FeeRecipient.String(), payload.ProposerFeeRecipient()) {
@@ -1742,6 +1756,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 			"expectedFeeRecipient": slotDuty.Entry.Message.FeeRecipient.String(),
 			"actualFeeRecipient":   payload.ProposerFeeRecipient(),
 		}).Info("fee recipient does not match")
+		responseCode = http.StatusBadRequest
 		api.RespondError(w, http.StatusBadRequest, "fee recipient does not match")
 		return
 	}
@@ -1749,6 +1764,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	// Don't accept blocks with 0 value
 	if payload.Value().Cmp(ZeroU256.BigInt()) == 0 || payload.NumTx() == 0 {
 		log.Info("submitNewBlock failed: block with 0 value or no txs")
+		responseCode = http.StatusOK
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -1757,6 +1773,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	err = SanityCheckBuilderBlockSubmission(payload)
 	if err != nil {
 		log.WithError(err).Info("block submission sanity checks failed")
+		responseCode = http.StatusBadRequest
 		api.RespondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -1768,6 +1785,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	api.payloadAttributesLock.RUnlock()
 	if !ok || payload.Slot() != attrs.slot {
 		log.Warn("payload attributes not (yet) known")
+		responseCode = http.StatusBadRequest
 		api.RespondError(w, http.StatusBadRequest, "payload attributes not (yet) known")
 		return
 	}
@@ -1775,6 +1793,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	if payload.Random() != attrs.payloadAttributes.PrevRandao {
 		msg := fmt.Sprintf("incorrect prev_randao - got: %s, expected: %s", payload.Random(), attrs.payloadAttributes.PrevRandao)
 		log.Info(msg)
+		responseCode = http.StatusBadRequest
 		api.RespondError(w, http.StatusBadRequest, msg)
 		return
 	}
@@ -1783,6 +1802,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 		withdrawalsRoot, err := ComputeWithdrawalsRoot(payload.Withdrawals())
 		if err != nil {
 			log.WithError(err).Warn("could not compute withdrawals root from payload")
+			responseCode = http.StatusBadRequest
 			api.RespondError(w, http.StatusBadRequest, "could not compute withdrawals root")
 			return
 		}
@@ -1790,6 +1810,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 		if withdrawalsRoot != attrs.withdrawalsRoot {
 			msg := fmt.Sprintf("incorrect withdrawals root - got: %s, expected: %s", withdrawalsRoot.String(), attrs.withdrawalsRoot.String())
 			log.Info(msg)
+			responseCode = http.StatusBadRequest
 			api.RespondError(w, http.StatusBadRequest, msg)
 			return
 		}
@@ -1802,10 +1823,12 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	log = log.WithField("timestampAfterSignatureCheck", time.Now().UTC().UnixMilli())
 	if err != nil {
 		log.WithError(err).Warn("failed verifying builder signature")
+		responseCode = http.StatusBadRequest
 		api.RespondError(w, http.StatusBadRequest, "failed verifying builder signature")
 		return
 	} else if !ok {
 		log.Warn("invalid builder signature")
+		responseCode = http.StatusBadRequest
 		api.RespondError(w, http.StatusBadRequest, "invalid signature")
 		return
 	}
@@ -1819,6 +1842,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 		log.WithError(err).Error("failed to get delivered payload slot from redis")
 	} else if payload.Slot() <= slotLastPayloadDelivered {
 		log.Info("rejecting submission because payload for this slot was already delivered")
+		responseCode = http.StatusBadRequest
 		api.RespondError(w, http.StatusBadRequest, "payload for this slot was already delivered")
 		return
 	}
@@ -1854,7 +1878,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 		}
 
 		if !api.ffDisableArchiveBlockSubmissions {
-			go api.archiveBlockSubmission(log, eligibleAt, receivedAt, reqContentType, requestPayloadBytes, payload)
+			go api.archiveBlockSubmission(log, eligibleAt, receivedAt, reqContentType, requestPayloadBytes, payload, responseCode)
 		}
 	}()
 
@@ -1877,6 +1901,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 		err := api.redis.DelBuilderBid(context.Background(), tx, payload.Slot(), payload.ParentHash(), payload.ProposerPubkey(), payload.BuilderPubkey().String())
 		if err != nil {
 			log.WithError(err).Error("failed processing cancellable bid below floor")
+			responseCode = http.StatusInternalServerError
 			api.RespondError(w, http.StatusInternalServerError, "failed processing cancellable bid below floor")
 			return
 		}
@@ -1885,6 +1910,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	} else if !isCancellationEnabled && isBidAtOrBelowFloor { // without cancellations: if at or below floor -> ignore
 		simResultC <- &blockSimResult{false, false, nil, nil}
 		log.Info("submission below floor bid value, without cancellation")
+		responseCode = http.StatusAccepted
 		api.RespondMsg(w, http.StatusAccepted, "accepted bid below floor, skipped validation")
 		return
 	}
@@ -1946,13 +1972,16 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 		})
 		if requestErr != nil { // Request error
 			if os.IsTimeout(requestErr) {
+				responseCode = http.StatusGatewayTimeout
 				api.RespondError(w, http.StatusGatewayTimeout, "validation request timeout")
 			} else {
+				responseCode = http.StatusBadRequest
 				api.RespondError(w, http.StatusBadRequest, requestErr.Error())
 			}
 			return
 		} else {
 			if validationErr != nil {
+				responseCode = http.StatusBadRequest
 				api.RespondError(w, http.StatusBadRequest, validationErr.Error())
 				return
 			}
@@ -1979,6 +2008,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 			log.WithError(err).Error("failed getting latest payload receivedAt from redis")
 		} else if receivedAt.UnixMilli() < latestPayloadReceivedAt {
 			log.Infof("already have a newer payload: now=%d / prev=%d", receivedAt.UnixMilli(), latestPayloadReceivedAt)
+			responseCode = http.StatusBadRequest
 			api.RespondError(w, http.StatusBadRequest, "already using a newer payload")
 			return
 		}
@@ -1988,6 +2018,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	getHeaderResponse, err := common.BuildGetHeaderResponse(payload, api.blsSk, api.publicKey, api.opts.EthNetDetails.DomainBuilder)
 	if err != nil {
 		log.WithError(err).Error("could not sign builder bid")
+		responseCode = http.StatusBadRequest
 		api.RespondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -1995,6 +2026,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	getPayloadResponse, err := common.BuildGetPayloadResponse(payload)
 	if err != nil {
 		log.WithError(err).Error("could not build getPayload response")
+		responseCode = http.StatusBadRequest
 		api.RespondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -2011,6 +2043,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 	updateBidResult, err := api.redis.SaveBidAndUpdateTopBid(context.Background(), tx, &bidTrace, payload, getPayloadResponse, getHeaderResponse, receivedAt, isCancellationEnabled, floorBidValue)
 	if err != nil {
 		log.WithError(err).Error("could not save bid and update top bids")
+		responseCode = http.StatusInternalServerError
 		api.RespondError(w, http.StatusInternalServerError, "failed saving and updating bid")
 		return
 	}
@@ -2055,6 +2088,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 		"profileRedisUs":     pf.RedisUpdate,
 		"profileTotalUs":     pf.Total,
 	}).Info("received block from builder")
+	responseCode = http.StatusOK
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -2451,7 +2485,7 @@ func (api *RelayAPI) optimisticV2SlowPath(r io.Reader, v2Opts v2SlowPathOpts) {
 		}
 
 		if !api.ffDisableArchiveBlockSubmissions {
-			go api.archiveBlockSubmission(log, v2Opts.eligibleAt, v2Opts.receivedAt, "", nil, payload)
+			go api.archiveBlockSubmission(log, v2Opts.eligibleAt, v2Opts.receivedAt, "", nil, payload, 500)
 		}
 	}()
 
