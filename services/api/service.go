@@ -644,10 +644,18 @@ func (api *RelayAPI) archiveBlockSubmission(log *logrus.Entry, eligibleAt time.T
 	}
 
 	submissionArchiveLog := []interface{}{
-		"eligible_at", fmt.Sprint(eligibleAt.UnixMilli()),
 		"received_at", fmt.Sprint(receivedAt.UnixMilli()),
 		"payload", payloadBytes,
-		"status_code", responseCode,
+	}
+
+	// Most bids do not become eligible and thus the eligibleAt field is not available.
+	if !eligibleAt.IsZero() {
+		submissionArchiveLog = append(submissionArchiveLog, "eligible_at", fmt.Sprint(eligibleAt.UnixMilli()))
+	}
+
+	// Response codes are not always available. It is unclear why.
+	if responseCode != 0 {
+		submissionArchiveLog = append(submissionArchiveLog, "status_code", responseCode)
 	}
 
 	err := api.redis.ArchiveBlockSubmission(submissionArchiveLog)
