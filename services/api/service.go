@@ -625,9 +625,11 @@ type BlockSubmissionArchiveEntry struct {
 	Value            *big.Int                      `json:"value"`
 }
 
-func (api *RelayAPI) archiveBlockSubmission(log *logrus.Entry, eligibleAt time.Time, receivedAt time.Time, reqContentType string, requestPayloadBytes []byte, executionPayload *common.BuilderSubmitBlockRequest, responseCode int) {
+// archiveBlockSubmission archives a block submission using a Redis stream.
+// We are mindful to only append key value pairs to the stream where values exist, avoiding sending and archiving empty strings and zeros.
+func (api *RelayAPI) archiveBlockSubmission(log *logrus.Entry, eligibleAt time.Time, receivedAt time.Time, reqContentType string, requestPayloadBytes []byte, executionPayload *common.BuilderSubmitBlockRequest, responseCode int, simResult *blockSimResult) {
 	if executionPayload.Capella.ExecutionPayload == nil {
-		log.WithField("payload", executionPayload).Debug("archiving payloads is only supported for Capella payloads")
+		log.WithField("payload", executionPayload).Debug("archiving block submissions is only supported for Capella block submissions, skipping block submission")
 		return
 	}
 
@@ -657,6 +659,27 @@ func (api *RelayAPI) archiveBlockSubmission(log *logrus.Entry, eligibleAt time.T
 	if responseCode != 0 {
 		submissionArchiveLog = append(submissionArchiveLog, "status_code", responseCode)
 	}
+
+	submissionArchiveLog = append(submissionArchiveLog, "sim_was_simulated", simResult.wasSimulated)
+	submissionArchiveLog = append(submissionArchiveLog, "sim_optimistic", simResult.optimisticSubmission)
+	if simResult.requestErr != nil {
+		submissionArchiveLog = append(submissionArchiveLog, "sim_request_error", fmt.Sprint((simResult.requestErr)))
+	}
+	// If we never tried to simulate, we don't know whether simulation was successful or not.
+	if simResult.wasSimulated {
+		submissionArchiveLog = append(submissionArchiveLog, "sim_ok", simResult.requestErr == nil && simResult.validationErr == nil)
+		if simResult.validationErr != nil {
+			submissionArchiveLog = append(submissionArchiveLog, "sim_validation_error", fmt.Sprint((simResult.validationErr)))
+		}
+	}
+
+	// The relay keeps only the best bids, to be able to serve suboptimal bids
+	// the proposer may ask for the block submission service reads archived
+	// bids and makes them available to the proposer API. To make sure the
+	// proposer API does not serve invalid bids, we mark the bids that are safe
+	// to propose. A bid is safe to propose if it was simulated and the
+	// simulation was successful.
+	submissionArchiveLog = append(submissionArchiveLog, "safe_to_propose", simResult.wasSimulated && (simResult.requestErr == nil && simResult.validationErr == nil))
 
 	err := api.redis.ArchiveBlockSubmission(submissionArchiveLog)
 	if err != nil {
@@ -1886,7 +1909,7 @@ func (api *RelayAPI) handleSubmitNewBlock(w http.ResponseWriter, req *http.Reque
 		}
 
 		if !api.ffDisableArchiveBlockSubmissions {
-			go api.archiveBlockSubmission(log, eligibleAt, receivedAt, reqContentType, requestPayloadBytes, payload, responseCode)
+			go api.archiveBlockSubmission(log, eligibleAt, receivedAt, reqContentType, requestPayloadBytes, payload, responseCode, simResult)
 		}
 	}()
 
@@ -2493,7 +2516,7 @@ func (api *RelayAPI) optimisticV2SlowPath(r io.Reader, v2Opts v2SlowPathOpts) {
 		}
 
 		if !api.ffDisableArchiveBlockSubmissions {
-			go api.archiveBlockSubmission(log, v2Opts.eligibleAt, v2Opts.receivedAt, "", nil, payload, 500)
+			go api.archiveBlockSubmission(log, v2Opts.eligibleAt, v2Opts.receivedAt, "", nil, payload, 500, nil)
 		}
 	}()
 
