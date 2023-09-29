@@ -35,9 +35,10 @@ type GetPayloadResponseKey struct {
 
 // Datastore provides a local memory cache with a Redis and DB backend
 type Datastore struct {
-	redis     *RedisCache
-	memcached *Memcached
-	db        database.IDatabaseService
+	redis        *RedisCache
+	redisArchive *RedisCache
+	memcached    *Memcached
+	db           database.IDatabaseService
 
 	knownValidatorsByPubkey   map[types.PubkeyHex]uint64
 	knownValidatorsByIndex    map[uint64]types.PubkeyHex
@@ -219,7 +220,20 @@ func (ds *Datastore) GetGetPayloadResponse(log *logrus.Entry, slot uint64, propo
 		}
 	}
 
-	// 3. try to get from database (should not happen, it's just a backup)
+	// 3. try to get it from redis archive
+	if ds.redis.archiveClient != nil {
+		resp, err = ds.redis.GetArchivedExecutionPayload(slot, _proposerPubkey, _blockHash)
+		if errors.Is(err, redis.Nil) {
+			log.WithError(err).Info("execution payload not found in redis archive")
+		} else if err != nil {
+			log.WithError(err).Error("error getting execution payload from redis archive")
+		} else if resp != nil {
+			log.Info("getPayload response from redis archive")
+			return resp, nil
+		}
+	}
+
+	// 4. try to get from database. This may happen when a proposer asks for a bid which was offered by another relay
 	executionPayloadEntry, err := ds.db.GetExecutionPayloadEntryBySlotPkHash(slot, proposerPubkey, blockHash)
 	if errors.Is(err, sql.ErrNoRows) {
 		log.WithError(err).Warn("execution payload not found in database")
