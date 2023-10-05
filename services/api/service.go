@@ -1363,7 +1363,7 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 	log.Info("getPayload request received")
 
 	// Export metadata at end of request
-	var abortReason string
+	abortReason := ""
 
 	defer func() {
 		archivePayloadLog := []interface{}{
