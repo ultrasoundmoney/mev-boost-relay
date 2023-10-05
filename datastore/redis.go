@@ -811,3 +811,15 @@ func (r *RedisCache) GetArchivedExecutionPayload(slot uint64, proposerPubkey, bl
 	resp.Capella.Version = consensusspec.DataVersionCapella
 	return resp, nil
 }
+
+func (r *RedisCache) ArchivePayloadRequest(payload []interface{}) error {
+	return r.archiveClient.XAdd(context.Background(), &redis.XAddArgs{
+		// We expect payload request logs to be at most 10 KiB in size. This
+		// means we can expect the stream to eventually take up
+		// 10_000 * 10 KiB = 100 MiB.
+		MaxLen: 10_000,
+		Approx: true,
+		Stream: "payload-request-archive",
+		Values: payload,
+	}).Err()
+}
