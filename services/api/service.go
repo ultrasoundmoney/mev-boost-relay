@@ -1384,13 +1384,11 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 			archivePayloadLog = append(archivePayloadLog, "ip", ip)
 		}
 
-		if payload != nil && payload.Capella != nil {
-			jsonPayload, err := json.Marshal(payload)
-			if err != nil {
-				log.WithError(err).Error("could not marshal payload")
-			} else {
-				archivePayloadLog = append(archivePayloadLog, "payload", string(jsonPayload))
-			}
+		jsonPayload, err := json.Marshal(payload)
+		if err != nil {
+			log.WithError(err).Error("could not marshal payload")
+		} else {
+			archivePayloadLog = append(archivePayloadLog, "payload", string(jsonPayload))
 		}
 
 		if abortReason != "" {
@@ -1402,7 +1400,7 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 			archivePayloadLog = append(archivePayloadLog, "req_id_param", reqIDParam)
 		}
 
-		err := api.redis.ArchivePayloadRequest(archivePayloadLog)
+		err = api.redis.ArchivePayloadRequest(archivePayloadLog)
 		if err != nil {
 			log.WithError(err).Error("failed to archive payload request")
 		}
