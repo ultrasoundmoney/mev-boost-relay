@@ -1404,6 +1404,8 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 		if err != nil {
 			log.WithError(err).Error("failed to archive payload request")
 		}
+
+		log.Debug(fmt.Sprintf("successfully archived payload request, block_hash: %s", payload.BlockHash()))
 	}()
 
 	// TODO: store signed blinded block in database (always)
