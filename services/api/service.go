@@ -1361,6 +1361,49 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 	log = log.WithField("timestampAfterSignatureVerify", time.Now().UTC().UnixMilli())
 	log.Info("getPayload request received")
 
+	// Export metadata at end of request
+	var abortReason string
+
+	defer func() {
+		archivePayloadLog := []interface{}{
+			"content_length", strconv.FormatInt(req.ContentLength, 10),
+			"finished_at", fmt.Sprint(time.Now().UTC().UnixMilli()),
+			"head_slot", strconv.FormatUint(headSlot, 10),
+			"proposer_pubkey", proposerPubkey.String(),
+			"received_at", receivedAt.UnixMilli(),
+			"user_agent", ua,
+		}
+
+		ip := req.Header.Get("X-Real-IP")
+
+		if ip != "" {
+			archivePayloadLog = append(archivePayloadLog, "ip", ip)
+		}
+
+		if payload != nil && payload.Capella != nil {
+			jsonPayload, err := json.Marshal(payload)
+			if err != nil {
+				log.WithError(err).Error("could not marshal payload")
+			} else {
+				archivePayloadLog = append(archivePayloadLog, "payload", string(jsonPayload))
+			}
+		}
+
+		if abortReason != "" {
+			archivePayloadLog = append(archivePayloadLog, "abort_reason", abortReason)
+		}
+
+		reqIDParam := req.URL.Query().Get("id")
+		if reqIDParam != "" {
+			archivePayloadLog = append(archivePayloadLog, "req_id_param", reqIDParam)
+		}
+
+		err := api.redis.ArchivePayloadRequest(archivePayloadLog)
+		if err != nil {
+			log.WithError(err).Error("failed to archive payload request")
+		}
+	}()
+
 	// TODO: store signed blinded block in database (always)
 
 	// Get the response - from Redis, Memcached or DB
@@ -1395,11 +1438,13 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 				if !api.ffDisablePayloadDBStorage {
 					_, err := api.db.GetBlockSubmissionEntry(payload.Slot(), proposerPubkey.String(), payload.BlockHash())
 					if errors.Is(err, sql.ErrNoRows) {
+						abortReason = "execution-payload-not-found"
 						log.Info("failed second attempt to get execution payload, discovered block was never submitted to this relay")
 						api.RespondError(w, http.StatusBadRequest, "no execution payload for this request, block was never seen by this relay")
 						return
 					}
 					if err != nil {
+						abortReason = "execution-payload-retrieval-error"
 						log.WithError(err).Error("failed second attempt to get execution payload, hit an error while checking if block was submitted to this relay")
 						api.RespondError(w, http.StatusInternalServerError, "no execution payload for this request, hit an error while checking if block was submitted to this relay")
 						return
@@ -1407,10 +1452,12 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 				}
 
 				// Case 2 or 3, we don't know which.
+				abortReason = "execution-payload-not-found"
 				log.Warn("failed second attempt to get execution payload, not found case, block was never submitted to this relay or bid was accepted but payload was lost")
 				api.RespondError(w, http.StatusBadRequest, "no execution payload for this request, block was never seen by this relay or bid was accepted but payload was lost, if you got this bid from us, please contact the relay")
 				return
 			} else {
+				abortReason = "execution-payload-retrieval-error"
 				log.WithError(err).Error("failed second attempt to get execution payload, error case")
 				api.RespondError(w, http.StatusInternalServerError, "no execution payload for this request")
 				return
@@ -1429,16 +1476,19 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 	if err != nil {
 		if errors.Is(err, datastore.ErrAnotherPayloadAlreadyDeliveredForSlot) {
 			// BAD VALIDATOR, 2x GETPAYLOAD FOR DIFFERENT PAYLOADS
+			abortReason = "payload-mismach-for-slot-already-delivered"
 			log.Warn("validator called getPayload twice for different payload hashes")
 			api.RespondError(w, http.StatusBadRequest, "another payload for this slot was already delivered")
 			return
 		} else if errors.Is(err, datastore.ErrPastSlotAlreadyDelivered) {
 			// BAD VALIDATOR, 2x GETPAYLOAD FOR PAST SLOT
+			abortReason = "request-for-past-slot-already-delivered"
 			log.Warn("validator called getPayload for past slot")
 			api.RespondError(w, http.StatusBadRequest, "payload for this slot was already delivered")
 			return
 		} else if errors.Is(err, redis.TxFailedErr) {
 			// BAD VALIDATOR, 2x GETPAYLOAD + RACE
+			abortReason = "payload-already-delivered-race-condition"
 			log.Warn("validator called getPayload twice (race)")
 			api.RespondError(w, http.StatusBadRequest, "payload for this slot was already delivered (race)")
 			return
@@ -1458,6 +1508,7 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 		}
 	} else if getPayloadRequestCutoffMs > 0 && msIntoSlot > int64(getPayloadRequestCutoffMs) {
 		// Reject requests after cutoff time
+		abortReason = "request-after-cutoff"
 		log.Warn("getPayload sent too late")
 		api.RespondError(w, http.StatusBadRequest, fmt.Sprintf("sent too late - %d ms into slot", msIntoSlot))
 
@@ -1473,6 +1524,7 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 	// Check that ExecutionPayloadHeader fields (sent by the proposer) match our known ExecutionPayload
 	err = EqExecutionPayloadToHeader(payload, getPayloadResp)
 	if err != nil {
+		abortReason = "execution-payload-header-mismatch"
 		log.WithError(err).Warn("ExecutionPayloadHeader not matching known ExecutionPayload")
 		api.RespondError(w, http.StatusBadRequest, "invalid execution payload header")
 		return
@@ -1484,6 +1536,7 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 	signedBeaconBlock := common.SignedBlindedBeaconBlockToBeaconBlock(payload, getPayloadResp)
 	code, err := api.beaconClient.PublishBlock(signedBeaconBlock) // errors are logged inside
 	if err != nil || code != http.StatusOK {
+		abortReason = "failed-to-publish-block"
 		log.WithError(err).WithField("code", code).Error("failed to publish block")
 		api.RespondError(w, http.StatusBadRequest, "failed to publish block")
 		return
