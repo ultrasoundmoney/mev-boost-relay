@@ -1372,7 +1372,10 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 			"head_slot", strconv.FormatUint(headSlot, 10),
 			"proposer_pubkey", proposerPubkey.String(),
 			"received_at", receivedAt.UnixMilli(),
-			"user_agent", ua,
+		}
+
+		if ua != "" {
+			archivePayloadLog = append(archivePayloadLog, "user_agent", ua)
 		}
 
 		ip := req.Header.Get("X-Real-IP")
