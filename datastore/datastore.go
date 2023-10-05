@@ -35,10 +35,9 @@ type GetPayloadResponseKey struct {
 
 // Datastore provides a local memory cache with a Redis and DB backend
 type Datastore struct {
-	redis        *RedisCache
-	redisArchive *RedisCache
-	memcached    *Memcached
-	db           database.IDatabaseService
+	redis     *RedisCache
+	memcached *Memcached
+	db        database.IDatabaseService
 
 	knownValidatorsByPubkey   map[types.PubkeyHex]uint64
 	knownValidatorsByIndex    map[uint64]types.PubkeyHex

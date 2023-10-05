@@ -627,12 +627,13 @@ type BlockSubmissionArchiveEntry struct {
 
 // archiveBlockSubmission archives a block submission using a Redis stream.
 // We are mindful to only append key value pairs to the stream where values exist, avoiding sending and archiving empty strings and zeros.
-func (api *RelayAPI) archiveBlockSubmission(log *logrus.Entry, eligibleAt time.Time, receivedAt time.Time, reqContentType string, requestPayloadBytes []byte, executionPayload *common.BuilderSubmitBlockRequest, responseCode int, simResult *blockSimResult) {
+func (api *RelayAPI) archiveBlockSubmission(log *logrus.Entry, eligibleAt, receivedAt time.Time, reqContentType string, requestPayloadBytes []byte, executionPayload *common.BuilderSubmitBlockRequest, responseCode int, simResult *blockSimResult) {
 	if executionPayload.Capella.ExecutionPayload == nil {
 		log.WithField("payload", executionPayload).Debug("archiving block submissions is only supported for Capella block submissions, skipping block submission")
 		return
 	}
 
+	//lint:ignore SA4006 variable is actually used
 	payloadBytes := []byte{}
 	if reqContentType == "json" {
 		payloadBytes = requestPayloadBytes
