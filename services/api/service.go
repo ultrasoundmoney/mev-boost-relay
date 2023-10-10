@@ -1392,10 +1392,13 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 
 	// Export metadata at end of request
 	abortReason := ""
+	timeBeforePublish := int64(0)
+	timeAfterPublish := int64(0)
 
 	defer func() {
 		archivePayloadLog := []interface{}{
 			"content_length", strconv.FormatInt(req.ContentLength, 10),
+			"decoded_at", decodeTime.UnixMilli(),
 			"finished_at", fmt.Sprint(time.Now().UTC().UnixMilli()),
 			"head_slot", strconv.FormatUint(headSlot, 10),
 			"proposer_pubkey", proposerPubkey.String(),
@@ -1426,6 +1429,20 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 		reqIDParam := req.URL.Query().Get("id")
 		if reqIDParam != "" {
 			archivePayloadLog = append(archivePayloadLog, "req_id_param", reqIDParam)
+		}
+
+		if timeBeforePublish != 0 {
+			archivePayloadLog = append(archivePayloadLog, "time_before_publish", timeBeforePublish)
+		}
+
+		if timeAfterPublish != 0 {
+			archivePayloadLog = append(archivePayloadLog, "time_after_publish", timeAfterPublish)
+		}
+
+		// Until we have a way to record latency directly, we ping IPs.
+		ipAddress := req.Header.Get("X-Real-IP")
+		if ipAddress != "" {
+			archivePayloadLog = append(archivePayloadLog, "ip_address", ipAddress)
 		}
 
 		err = api.redis.ArchivePayloadRequest(archivePayloadLog)
@@ -1563,7 +1580,7 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 	}
 
 	// Publish the signed beacon block via beacon-node
-	timeBeforePublish := time.Now().UTC().UnixMilli()
+	timeBeforePublish = time.Now().UTC().UnixMilli()
 	log = log.WithField("timestampBeforePublishing", timeBeforePublish)
 	signedBeaconBlock := common.SignedBlindedBeaconBlockToBeaconBlock(payload, getPayloadResp)
 	code, err := api.beaconClient.PublishBlock(signedBeaconBlock) // errors are logged inside
@@ -1573,7 +1590,7 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 		api.RespondError(w, http.StatusBadRequest, "failed to publish block")
 		return
 	}
-	timeAfterPublish := time.Now().UTC().UnixMilli()
+	timeAfterPublish = time.Now().UTC().UnixMilli()
 	msNeededForPublishing := uint64(timeAfterPublish - timeBeforePublish)
 	log = log.WithField("timestampAfterPublishing", timeAfterPublish)
 	log.WithField("msNeededForPublishing", msNeededForPublishing).Info("block published through beacon node")
