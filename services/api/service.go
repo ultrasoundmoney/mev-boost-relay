@@ -232,7 +232,7 @@ type registrationMetadata struct {
 	FeeRecipient string `json:"fee_recipient"`
 	GasLimit     uint64 `json:"gas_limit"`
 	IPAddress    string `json:"ip_address"`
-	ReceivedAt   string `json:"received_at"`
+	ReceivedAt   int64  `json:"received_at"`
 	Timestamp    uint64 `json:"timestamp"`
 	UserAgent    string `json:"user_agent"`
 }
@@ -1145,8 +1145,10 @@ func (api *RelayAPI) handleRegisterValidator(w http.ResponseWriter, req *http.Re
 			FeeRecipient: signedValidatorRegistration.Message.FeeRecipient.String(),
 			GasLimit:     signedValidatorRegistration.Message.GasLimit,
 			// Until we have a way to record latency directly, we ping IPs.
-			IPAddress: req.Header.Get("X-Real-IP"),
-			Timestamp: signedValidatorRegistration.Message.Timestamp,
+			IPAddress:  req.Header.Get("X-Real-IP"),
+			ReceivedAt: start.UnixMilli(),
+			Timestamp:  signedValidatorRegistration.Message.Timestamp,
+			UserAgent:  ua,
 		}
 		pubkeyMetadataMutex.Lock()
 		pubkeyMetadata[pkHex.String()] = metadata
