@@ -57,10 +57,11 @@ var (
 
 var (
 	// Proposer API (builder-specs)
-	pathStatus            = "/eth/v1/builder/status"
-	pathRegisterValidator = "/eth/v1/builder/validators"
-	pathGetHeader         = "/eth/v1/builder/header/{slot:[0-9]+}/{parent_hash:0x[a-fA-F0-9]+}/{pubkey:0x[a-fA-F0-9]+}"
-	pathGetPayload        = "/eth/v1/builder/blinded_blocks"
+	pathStatus              = "/eth/v1/builder/status"
+	pathRegisterValidator   = "/eth/v1/builder/validators"
+	pathGetHeader           = "/eth/v1/builder/header/{slot:[0-9]+}/{parent_hash:0x[a-fA-F0-9]+}/{pubkey:0x[a-fA-F0-9]+}"
+	pathGetPayload          = "/eth/v1/builder/blinded_blocks"
+	pathGetRegistrationMeta = "/ultrasound/v1/registration_meta"
 
 	// Block builder API
 	pathBuilderGetValidators = "/relay/v1/builder/validators"
@@ -104,6 +105,11 @@ var (
 	apiNoHeaderUserAgents = common.GetEnvStrSlice("NO_HEADER_USERAGENTS", []string{
 		"mev-boost/v1.5.0 Go-http-client/1.1", // Prysm v4.0.1 (Shapella signing issue)
 	})
+)
+
+var (
+	pubkeyMetadata      = make(map[string]registrationMetadata)
+	pubkeyMetadataMutex = &sync.Mutex{}
 )
 
 // RelayAPIOpts contains the options for a relay
@@ -216,6 +222,15 @@ type RelayAPI struct {
 	optimisticBlocksWG sync.WaitGroup
 	// Cache for builder statuses and collaterals.
 	blockBuildersCache map[string]*blockBuilderCacheEntry
+}
+
+type registrationMetadata struct {
+	FeeRecipient string `json:"fee_recipient"`
+	GasLimit     uint64 `json:"gas_limit"`
+	IPAddress    string `json:"ip_address"`
+	ReceivedAt   int64  `json:"received_at"`
+	Timestamp    uint64 `json:"timestamp"`
+	UserAgent    string `json:"user_agent"`
 }
 
 // NewRelayAPI creates a new service. if builders is nil, allow any builder
@@ -335,6 +350,7 @@ func (api *RelayAPI) getRouter() http.Handler {
 		r.HandleFunc(pathRegisterValidator, api.handleRegisterValidator).Methods(http.MethodPost)
 		r.HandleFunc(pathGetHeader, api.handleGetHeader).Methods(http.MethodGet)
 		r.HandleFunc(pathGetPayload, api.handleGetPayload).Methods(http.MethodPost)
+		r.HandleFunc(pathGetRegistrationMeta, api.handleGetRegistrationMeta).Methods(http.MethodGet)
 	}
 
 	// Builder API
@@ -1037,6 +1053,20 @@ func (api *RelayAPI) handleRegisterValidator(w http.ResponseWriter, req *http.Re
 			}
 		}
 
+		// Store the metadata in memory
+		metadata := registrationMetadata{
+			FeeRecipient: signedValidatorRegistration.Message.FeeRecipient.String(),
+			GasLimit:     signedValidatorRegistration.Message.GasLimit,
+			// Until we have a way to record latency directly, we ping IPs.
+			IPAddress:  req.Header.Get("X-Real-IP"),
+			ReceivedAt: start.UnixMilli(),
+			Timestamp:  signedValidatorRegistration.Message.Timestamp,
+			UserAgent:  ua,
+		}
+		pubkeyMetadataMutex.Lock()
+		pubkeyMetadata[pkHex.String()] = metadata
+		pubkeyMetadataMutex.Unlock()
+
 		// Now we have a new registration to process
 		numRegNew += 1
 
@@ -1560,6 +1590,24 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 		"blockNumber": payload.BlockNumber(),
 	})
 	log.Info("execution payload delivered")
+}
+
+func (api *RelayAPI) handleGetRegistrationMeta(w http.ResponseWriter, req *http.Request) {
+	log := api.log.WithFields(logrus.Fields{
+		"method":   "getRegistrationMeta",
+		"ua":       req.UserAgent(),
+		"headSlot": api.headSlot.Load(),
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+
+	if err := json.NewEncoder(w).Encode(pubkeyMetadata); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		log.WithError(err).Error("failed to encode pubkeyMetadata")
+		return
+	}
+
+	log.Debug("getRegistrationMeta request processed")
 }
 
 // --------------------
