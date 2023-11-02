@@ -1442,6 +1442,69 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 		}
 	}()
 
+	// Export metadata at end of request
+	abortReason := ""
+	timeBeforePublish := int64(0)
+	timeAfterPublish := int64(0)
+
+	defer func() {
+		archivePayloadLog := []interface{}{
+			"content_length", strconv.FormatInt(req.ContentLength, 10),
+			"decoded_at", decodeTime.UnixMilli(),
+			"finished_at", fmt.Sprint(time.Now().UTC().UnixMilli()),
+			"head_slot", strconv.FormatUint(headSlot, 10),
+			"proposer_pubkey", proposerPubkey.String(),
+			"received_at", receivedAt.UnixMilli(),
+		}
+
+		if ua != "" {
+			archivePayloadLog = append(archivePayloadLog, "user_agent", ua)
+		}
+
+		ip := req.Header.Get("X-Real-IP")
+
+		if ip != "" {
+			archivePayloadLog = append(archivePayloadLog, "ip", ip)
+		}
+
+		jsonPayload, err := json.Marshal(payload)
+		if err != nil {
+			log.WithError(err).Error("could not marshal payload")
+		} else {
+			archivePayloadLog = append(archivePayloadLog, "payload", string(jsonPayload))
+		}
+
+		if abortReason != "" {
+			archivePayloadLog = append(archivePayloadLog, "abort_reason", abortReason)
+		}
+
+		reqIDParam := req.URL.Query().Get("id")
+		if reqIDParam != "" {
+			archivePayloadLog = append(archivePayloadLog, "req_id_param", reqIDParam)
+		}
+
+		if timeBeforePublish != 0 {
+			archivePayloadLog = append(archivePayloadLog, "time_before_publish", timeBeforePublish)
+		}
+
+		if timeAfterPublish != 0 {
+			archivePayloadLog = append(archivePayloadLog, "time_after_publish", timeAfterPublish)
+		}
+
+		// Until we have a way to record latency directly, we ping IPs.
+		ipAddress := req.Header.Get("X-Real-IP")
+		if ipAddress != "" {
+			archivePayloadLog = append(archivePayloadLog, "ip_address", ipAddress)
+		}
+
+		err = api.redis.ArchivePayloadRequest(archivePayloadLog)
+		if err != nil {
+			log.WithError(err).Error("failed to archive payload request")
+		}
+
+		log.Debug(fmt.Sprintf("successfully archived payload request, block_hash: %s", blockHash.String()))
+	}()
+
 	// Get the response - from Redis, Memcache or DB
 	// note that recent mev-boost versions only send getPayload to relays that provided the bid, older versions send getPayload to all relays.
 	// Additionally, proposers may feel it's safer to ask for a bid from all relays and fork.
@@ -1473,11 +1536,13 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 				if !api.ffDisablePayloadDBStorage {
 					_, err := api.db.GetBlockSubmissionEntry(uint64(slot), proposerPubkey.String(), blockHash.String())
 					if errors.Is(err, sql.ErrNoRows) {
+						abortReason = "execution-payload-not-found"
 						log.Info("failed second attempt to get execution payload, discovered block was never submitted to this relay")
 						api.RespondError(w, http.StatusBadRequest, "no execution payload for this request, block was never seen by this relay")
 						return
 					}
 					if err != nil {
+						abortReason = "execution-payload-retrieval-error"
 						log.WithError(err).Error("failed second attempt to get execution payload, hit an error while checking if block was submitted to this relay")
 						api.RespondError(w, http.StatusInternalServerError, "no execution payload for this request, hit an error while checking if block was submitted to this relay")
 						return
@@ -1485,10 +1550,12 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 				}
 
 				// Case 2 or 3, we don't know which.
+				abortReason = "execution-payload-not-found"
 				log.Warn("failed second attempt to get execution payload, not found case, block was never submitted to this relay or bid was accepted but payload was lost")
 				api.RespondError(w, http.StatusBadRequest, "no execution payload for this request, block was never seen by this relay or bid was accepted but payload was lost, if you got this bid from us, please contact the relay")
 				return
 			} else {
+				abortReason = "execution-payload-retrieval-error"
 				log.WithError(err).Error("failed second attempt to get execution payload, error case")
 				api.RespondError(w, http.StatusInternalServerError, "no execution payload for this request")
 				return
@@ -1557,7 +1624,7 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 	}
 
 	// Publish the signed beacon block via beacon-node
-	timeBeforePublish := time.Now().UTC().UnixMilli()
+	timeBeforePublish = time.Now().UTC().UnixMilli()
 	log = log.WithField("timestampBeforePublishing", timeBeforePublish)
 	signedBeaconBlock, err := common.SignedBlindedBeaconBlockToBeaconBlock(payload, getPayloadResp)
 	if err != nil {
@@ -1571,7 +1638,7 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 		api.RespondError(w, http.StatusBadRequest, "failed to publish block")
 		return
 	}
-	timeAfterPublish := time.Now().UTC().UnixMilli()
+	timeAfterPublish = time.Now().UTC().UnixMilli()
 	msNeededForPublishing = uint64(timeAfterPublish - timeBeforePublish)
 	log = log.WithField("timestampAfterPublishing", timeAfterPublish)
 	log.WithField("msNeededForPublishing", msNeededForPublishing).Info("block published through beacon node")

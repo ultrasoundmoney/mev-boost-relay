@@ -11,6 +11,7 @@ var (
 	defaultBeaconURIs       = common.GetSliceEnv("BEACON_URIS", []string{"http://localhost:3500"})
 	defaultRedisURI         = common.GetEnv("REDIS_URI", "localhost:6379")
 	defaultRedisReadonlyURI = common.GetEnv("REDIS_READONLY_URI", "")
+	defaultRedisArchiveURI  = common.GetEnv("REDIS_ARCHIVE_URI", "")
 	defaultPostgresDSN      = common.GetEnv("POSTGRES_DSN", "")
 	defaultMemcachedURIs    = common.GetSliceEnv("MEMCACHED_URIS", nil)
 	defaultLogJSON          = os.Getenv("LOG_JSON") != ""
@@ -19,6 +20,7 @@ var (
 	beaconNodeURIs   []string
 	redisURI         string
 	redisReadonlyURI string
+	redisArchiveURI  string
 	postgresDSN      string
 	memcachedURIs    []string
 
