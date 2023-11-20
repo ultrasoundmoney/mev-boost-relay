@@ -87,6 +87,7 @@ type RedisCache struct {
 	// prefixes (keys generated with a function)
 	prefixGetHeaderResponse           string
 	prefixExecPayloadCapella          string
+	prefixExecPayloadCapellaJSON      string
 	prefixBidTrace                    string
 	prefixBlockBuilderLatestBids      string // latest bid for a given slot
 	prefixBlockBuilderLatestBidsValue string // value of latest bid for a given slot
@@ -136,9 +137,10 @@ func NewRedisCache(prefix, redisURI, readonlyURI, archiveURI string) (*RedisCach
 		client:         client,
 		readonlyClient: roClient,
 
-		prefixGetHeaderResponse:  fmt.Sprintf("%s/%s:cache-gethead-response", redisPrefix, prefix),
-		prefixExecPayloadCapella: fmt.Sprintf("%s/%s:cache-execpayload-capella", redisPrefix, prefix),
-		prefixBidTrace:           fmt.Sprintf("%s/%s:cache-bid-trace", redisPrefix, prefix),
+		prefixGetHeaderResponse:      fmt.Sprintf("%s/%s:cache-gethead-response", redisPrefix, prefix),
+		prefixExecPayloadCapella:     fmt.Sprintf("%s/%s:cache-execpayload-capella", redisPrefix, prefix),
+		prefixExecPayloadCapellaJSON: fmt.Sprintf("%s/%s:cache-execpayload-capella-json", redisPrefix, prefix),
+		prefixBidTrace:               fmt.Sprintf("%s/%s:cache-bid-trace", redisPrefix, prefix),
 
 		prefixBlockBuilderLatestBids:      fmt.Sprintf("%s/%s:block-builder-latest-bid", redisPrefix, prefix),       // hashmap for slot+parentHash+proposerPubkey with builderPubkey as field
 		prefixBlockBuilderLatestBidsValue: fmt.Sprintf("%s/%s:block-builder-latest-bid-value", redisPrefix, prefix), // hashmap for slot+parentHash+proposerPubkey with builderPubkey as field
@@ -164,6 +166,10 @@ func (r *RedisCache) keyCacheGetHeaderResponse(slot uint64, parentHash, proposer
 
 func (r *RedisCache) keyExecPayloadCapella(slot uint64, proposerPubkey, blockHash string) string {
 	return fmt.Sprintf("%s:%d_%s_%s", r.prefixExecPayloadCapella, slot, proposerPubkey, blockHash)
+}
+
+func (r *RedisCache) keyExecPayloadCapellaJSON(slot uint64, proposerPubkey, blockHash string) string {
+	return fmt.Sprintf("%s:%d_%s_%s", r.prefixExecPayloadCapellaJSON, slot, proposerPubkey, blockHash)
 }
 
 func (r *RedisCache) keyCacheBidTrace(slot uint64, proposerPubkey, blockHash string) string {
@@ -766,4 +772,29 @@ func (r *RedisCache) ArchivePayloadRequest(payload []interface{}) error {
 		Stream: "payload-request-archive",
 		Values: payload,
 	}).Err()
+}
+
+func (r *RedisCache) GetArchivedExecutionPayload(slot uint64, proposerPubkey, blockHash string) (*common.VersionedExecutionPayload, error) {
+	if r.archiveClient == nil {
+		return nil, errors.New("archive client not configured")
+	}
+
+	resp := new(common.VersionedExecutionPayload)
+	capellaPayload := new(capella.ExecutionPayload)
+
+	key := r.keyExecPayloadCapellaJSON(slot, proposerPubkey, blockHash)
+	val, err := r.archiveClient.Get(context.Background(), key).Result()
+	if err != nil {
+		return nil, err
+	}
+
+	err = capellaPayload.UnmarshalJSON([]byte(val))
+	if err != nil {
+		return nil, err
+	}
+
+	resp.Capella = new(api.VersionedExecutionPayload)
+	resp.Capella.Capella = capellaPayload
+	resp.Capella.Version = consensusspec.DataVersionCapella
+	return resp, nil
 }
