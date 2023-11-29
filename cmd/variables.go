@@ -9,6 +9,7 @@ import (
 var (
 	defaultNetwork          = common.GetEnv("NETWORK", "")
 	defaultBeaconURIs       = common.GetSliceEnv("BEACON_URIS", []string{"http://localhost:3500"})
+	defaultBeaconURIsV2     = common.GetSliceEnv("BEACON_URIS_V2", []string{"http://localhost:3501"})
 	defaultRedisURI         = common.GetEnv("REDIS_URI", "localhost:6379")
 	defaultRedisReadonlyURI = common.GetEnv("REDIS_READONLY_URI", "")
 	defaultRedisArchiveURI  = common.GetEnv("REDIS_ARCHIVE_URI", "")
@@ -18,6 +19,7 @@ var (
 	defaultLogLevel         = common.GetEnv("LOG_LEVEL", "info")
 
 	beaconNodeURIs   []string
+	beaconNodeURIsV2 []string
 	redisURI         string
 	redisReadonlyURI string
 	redisArchiveURI  string

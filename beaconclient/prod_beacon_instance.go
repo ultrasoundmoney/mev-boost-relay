@@ -15,20 +15,22 @@ import (
 )
 
 type ProdBeaconInstance struct {
-	log       *logrus.Entry
-	beaconURI string
+	log         *logrus.Entry
+	beaconURI   string
+	beaconURIV2 string
 
 	// feature flags
 	ffUseV2PublishBlockEndpoint bool
 }
 
-func NewProdBeaconInstance(log *logrus.Entry, beaconURI string) *ProdBeaconInstance {
+func NewProdBeaconInstance(log *logrus.Entry, beaconURI, beaconURIV2 string) *ProdBeaconInstance {
 	_log := log.WithFields(logrus.Fields{
-		"component": "beaconInstance",
-		"beaconURI": beaconURI,
+		"component":   "beaconInstance",
+		"beaconURI":   beaconURI,
+		"beaconURIV2": beaconURIV2,
 	})
 
-	client := &ProdBeaconInstance{_log, beaconURI, false}
+	client := &ProdBeaconInstance{_log, beaconURI, beaconURIV2, false}
 
 	// feature flags
 	if os.Getenv("USE_V2_PUBLISH_BLOCK_ENDPOINT") != "" {
@@ -269,16 +271,31 @@ func (c *ProdBeaconInstance) GetURI() string {
 	return c.beaconURI
 }
 
+// PublishBlock publishes a block to the beacon node
+// v2 endpoint occasionally fails to publish. For debugging purposes we temporarily publish to both endpoints.
 func (c *ProdBeaconInstance) PublishBlock(block *common.SignedBeaconBlock, broadcastMode BroadcastMode) (code int, err error) {
-	var uri string
-	if c.ffUseV2PublishBlockEndpoint {
-		uri = fmt.Sprintf("%s/eth/v2/beacon/blocks?broadcast_validation=%s", c.beaconURI, broadcastMode.String())
-	} else {
-		uri = fmt.Sprintf("%s/eth/v1/beacon/blocks", c.beaconURI)
-	}
+	// v1 first, its the one we know works.
+	uri := fmt.Sprintf("%s/eth/v1/beacon/blocks", c.beaconURI)
 	headers := http.Header{}
-	headers.Add("Eth-Consensus-Version", common.ForkVersionStringCapella) // optional in v1, required in v2
-	return fetchBeacon(http.MethodPost, uri, block, nil, nil, headers)
+	// optional in v1, required in v2
+	headers.Add("Eth-Consensus-Version", common.ForkVersionStringCapella)
+	v1Result, err := fetchBeacon(http.MethodPost, uri, block, nil, nil, headers)
+
+	// v2
+	if c.ffUseV2PublishBlockEndpoint {
+		uriV2 := fmt.Sprintf("%s/eth/v2/beacon/blocks?broadcast_validation=%s", c.beaconURIV2, broadcastMode.String())
+		headers = http.Header{}
+		// optional in v1, required in v2
+		headers.Add("Eth-Consensus-Version", common.ForkVersionStringCapella)
+		v2Result, v2Err := fetchBeacon(http.MethodPost, uriV2, block, nil, nil, headers)
+		if v2Err != nil {
+			c.log.WithError(v2Err).Error("failed to publish block to v2 endpoint")
+		} else {
+			c.log.WithField("code", v2Result).Info("published block to v2 endpoint")
+		}
+	}
+
+	return v1Result, err
 }
 
 type GetGenesisResponse struct {

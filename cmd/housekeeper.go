@@ -60,10 +60,18 @@ var housekeeperCmd = &cobra.Command{
 		if len(beaconNodeURIs) == 0 {
 			log.Fatalf("no beacon endpoints specified")
 		}
+		// We temporarily publish to v1 and v2 endpoints until it is clear why v2 fails sometimes.
 		log.Infof("Using beacon endpoints: %s", strings.Join(beaconNodeURIs, ", "))
+		log.Infof("Using beacon v2 endpoints: %s", strings.Join(beaconNodeURIsV2, ", "))
 		var beaconInstances []beaconclient.IBeaconInstance
-		for _, uri := range beaconNodeURIs {
-			beaconInstances = append(beaconInstances, beaconclient.NewProdBeaconInstance(log, uri))
+		for i, uri := range beaconNodeURIs {
+			if i < len(beaconNodeURIsV2) {
+				uriV2 := beaconNodeURIsV2[i]
+				beaconInstances = append(beaconInstances, beaconclient.NewProdBeaconInstance(log, uri, uriV2))
+			} else {
+				// Explain the problem and exit the program
+				log.Fatalf("beacon-uris-v2 is shorter than beacon-uris")
+			}
 		}
 		beaconClient := beaconclient.NewMultiBeaconClient(log, beaconInstances)
 
