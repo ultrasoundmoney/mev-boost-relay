@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/flashbots/mev-boost-relay/common"
 	"github.com/sirupsen/logrus"
@@ -38,7 +39,7 @@ type IMultiBeaconClient interface {
 	// GetStateValidators returns all active and pending validators from the beacon node
 	GetStateValidators(stateID string) (*GetStateValidatorsResponse, error)
 	GetProposerDuties(epoch uint64) (*ProposerDutiesResponse, error)
-	PublishBlock(block *common.VersionedSignedProposal) (code int, err error)
+	PublishBlock(block *common.VersionedSignedProposal) (code int, firstPublishTime int64, err error)
 	GetGenesis() (*GetGenesisResponse, error)
 	GetSpec() (spec *GetSpecResponse, err error)
 	GetForkSchedule() (spec *GetForkScheduleResponse, err error)
@@ -243,22 +244,23 @@ func (c *MultiBeaconClient) beaconInstancesByLeastUsed() []IBeaconInstance {
 }
 
 type publishResp struct {
-	index int
-	code  int
-	err   error
+	index       int
+	code        int
+	err         error
+	completedAt int64
 }
 
 // PublishBlock publishes the signed beacon block via https://ethereum.github.io/beacon-APIs/#/ValidatorRequiredApi/publishBlock
-func (c *MultiBeaconClient) PublishBlock(block *common.VersionedSignedProposal) (code int, err error) {
+func (c *MultiBeaconClient) PublishBlock(block *common.VersionedSignedProposal) (code int, firstPublishTime int64, err error) {
 	slot, err := block.Slot()
 	if err != nil {
 		c.log.WithError(err).Warn("failed to publish block as block slot is missing")
-		return 0, err
+		return 0, 0, err
 	}
 	blockHash, err := block.ExecutionBlockHash()
 	if err != nil {
 		c.log.WithError(err).Warn("failed to publish block as block hash is missing")
-		return 0, err
+		return 0, 0, err
 	}
 	log := c.log.WithFields(logrus.Fields{
 		"slot":      slot,
@@ -267,7 +269,7 @@ func (c *MultiBeaconClient) PublishBlock(block *common.VersionedSignedProposal) 
 
 	clients := c.beaconInstancesByLastResponse()
 
-	// The chan will be cleaner up automatically once the function exists even if it was still being written to
+	// The chan will be cleaned up automatically once the function exits even if it was still being written to
 	resChans := make(chan publishResp, len(clients))
 
 	for i, client := range clients {
@@ -276,9 +278,10 @@ func (c *MultiBeaconClient) PublishBlock(block *common.VersionedSignedProposal) 
 		go func(index int, client IBeaconInstance) {
 			code, err := client.PublishBlock(block, c.broadcastMode)
 			resChans <- publishResp{
-				index: index,
-				code:  code,
-				err:   err,
+				index:       index,
+				code:        code,
+				err:         err,
+				completedAt: time.Now().UTC().UnixMilli(),
 			}
 		}(i, client)
 	}
@@ -299,14 +302,20 @@ func (c *MultiBeaconClient) PublishBlock(block *common.VersionedSignedProposal) 
 			continue
 		}
 
+		if firstPublishTime == 0 {
+			firstPublishTime = res.completedAt
+		} else if res.completedAt < firstPublishTime {
+			firstPublishTime = res.completedAt
+		}
+
 		c.bestBeaconIndex.Store(int64(res.index))
 
 		log.WithField("statusCode", res.code).Info("published block")
-		return res.code, nil
+		return res.code, firstPublishTime, nil
 	}
 
 	log.Error("failed to publish block on any CL node")
-	return lastErrPublishResp.code, fmt.Errorf("last error: %w", lastErrPublishResp.err)
+	return lastErrPublishResp.code, 0, fmt.Errorf("last error: %w", lastErrPublishResp.err)
 }
 
 // GetGenesis returns the genesis info - https://ethereum.github.io/beacon-APIs/#/Beacon/getGenesis

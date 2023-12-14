@@ -1674,15 +1674,15 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 		api.RespondError(w, http.StatusInternalServerError, "failed to convert signed blinded beacon block to beacon block")
 		return
 	}
-	code, err := api.beaconClient.PublishBlock(signedBeaconBlock) // errors are logged inside
+	code, firstPublishTime, err := api.beaconClient.PublishBlock(signedBeaconBlock) // errors are logged inside
 	if err != nil || code != http.StatusOK {
 		log.WithError(err).WithField("code", code).Error("failed to publish block")
 		api.RespondError(w, http.StatusBadRequest, "failed to publish block")
 		return
 	}
 	timeAfterPublish = time.Now().UTC().UnixMilli()
-	msNeededForPublishing = uint64(timeAfterPublish - timeBeforePublish)
-	log = log.WithField("timestampAfterPublishing", timeAfterPublish)
+	msNeededForPublishing = uint64(firstPublishTime - timeBeforePublish)
+	log = log.WithField("timestampAfterPublishing", firstPublishTime)
 	log.WithField("msNeededForPublishing", msNeededForPublishing).Info("block published through beacon node")
 
 	// give the beacon network some time to propagate the block
