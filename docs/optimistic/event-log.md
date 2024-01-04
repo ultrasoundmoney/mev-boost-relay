@@ -2,7 +2,7 @@
 
 ## Builder collateral received
 
-We accept builder collateral at [`relay.ultrasound.eth`](https://app.ens.domains/name/relay.ultrasound.eth/details) which resolves to the ETH address [`0x4186709183c80a5a8b8fdc271f6ed843d7a83959`.](https://beaconcha.in/address/0x4186709183c80a5a8b8fdc271f6ed843d7a83959)
+We accept builder collateral at [`relay.ultrasound.eth`](https://app.ens.domains/name/relay.ultrasound.eth/details) which resolves to the ETH address [`0x27a8318036e3639c4F92C919C5304948e8C135EE`.](https://beaconcha.in/address/0x27a8318036e3639c4F92C919C5304948e8C135EE)
 
 |builder id |collateral |	transaction	| fee recipient | pubkeys |
 |------------------| --------- | ----------- | ----------- |----|
