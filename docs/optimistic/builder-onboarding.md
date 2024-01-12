@@ -5,7 +5,7 @@ Thank you for your interest in low-latency optimistic relaying with [the ultra s
 **TLDR**
 
 >1. Share with us over Telegram or Discord the list of builder pubkeys you want promoted for optimistic relaying. We will manually review recent bid submissions from those pubkeys to ensure a low historical rate of bad bids. A bad bid is one with an invalid block or an insufficient payment to the proposer.
->2. Post a maximum of 1 ETH collateral to `relay.ultrasound.eth` and share the transaction details with us. The transaction sender must be an address publicly associated with one of your builder pubkeys, ideally your primary fee recipient address.
+>2. Post a maximum of 32 ETH collateral to `relay.ultrasound.eth` and share the transaction details with us. The transaction sender must be an address publicly associated with one of your builder pubkeys, ideally your primary fee recipient address.
 >3. The relay will automatically demote you for submitting a single bad bid to the relay. You will only be re-promoted after the underlying reason for submitting a bad bid is addressed.
 >4. A bad bid that wins the auction and is signed by the proposer will cause an on-chain incident, i.e. a missed slot or an insufficient proposer payment. We expect you to directly compensate the proposer the bid value plus a fixed 0.01 ETH penalty within 24 hours and send us the transaction details.
 >5. Without receiving proof the proposer was compensated within 24 hours we may use your collateral to compensate the proposer ourselves.
@@ -33,13 +33,13 @@ Consider the example below:
  0xdddddd...    | false         |                  0 | bloxroute
 ```
 
-Pubkeys `0xaaaaaa` and `0xbbbbbb` share the same builder ID `mike` and collateral of 0.99 ETH. (0.99 ETH is the maximum 1 ETH collateral minus 0.01 ETH for the fixed penalty.) Since `is_optimistic` is `true` any bid with a value less than or equal to 0.99 ETH will be relayed optimistically. A larger bid, e.g. with 10 ETH of value, will not be relayed optimistically. If either pubkey submits an invalid bid both pubkeys will be demoted before the next slot.
+Pubkeys `0xaaaaaa` and `0xbbbbbb` share the same builder ID `mike` and collateral of 0.99 ETH. (0.99 ETH would be assuming 1 ETH collateral minus 0.01 ETH for the fixed penalty.) Since `is_optimistic` is `true` any bid with a value less than or equal to 0.99 ETH will be relayed optimistically. A larger bid, e.g. with 10 ETH of value, will not be relayed optimistically. If either pubkey submits an invalid bid both pubkeys will be demoted before the next slot.
 
 Pubkey `0xcccccc` also has 0.99 ETH of collateral but `is_optimistic` is `false` so their bids will not be relayed optimistically. Builder `0xdddddd` has no collateral so their bids will also not be relayed optimistically.
 
 ### Collateral
 
-Collateral for optimistic relaying must be posted to `relay.ultrasound.eth` from an address publicly associated with one of your builder pubkeys, ideally your primary fee recipient address. The maximum collateral per pubkey is currently 1 ETH—this value may be increased or decreased from time to time. Please contact us if you wish to stop optimistic relaying and have your collateral returned.
+Collateral for optimistic relaying must be posted to `relay.ultrasound.eth` from an address publicly associated with one of your builder pubkeys, ideally your primary fee recipient address. The maximum collateral per pubkey is currently 32 ETH—this value may be increased or decreased from time to time. Please contact us if you wish to stop optimistic relaying and have your collateral returned.
 
 ### Builder ID
 
