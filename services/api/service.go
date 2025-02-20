@@ -1545,8 +1545,7 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 			return
 		}
 
-		convertedBidTrace := common.ConvertToBidTraceV2WithBlobFields(bidTrace)
-		err = api.db.SaveDeliveredPayload(convertedBidTrace, payload, decodeTime, msNeededForPublishing)
+		err = api.db.SaveDeliveredPayload(bidTrace, payload, decodeTime, msNeededForPublishing)
 		if err != nil {
 			log.WithError(err).WithFields(logrus.Fields{
 				"bidTrace": bidTrace,
@@ -1564,8 +1563,7 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 		api.optimisticBlocksWG.Wait()
 
 		// Check if there is a demotion for the winning block.
-		convertedBidTrace = common.ConvertToBidTraceV2WithBlobFields(bidTrace)
-		_, err = api.db.GetBuilderDemotion(convertedBidTrace)
+		_, err = api.db.GetBuilderDemotion(bidTrace)
 		// If demotion not found, we are done!
 		if errors.Is(err, sql.ErrNoRows) {
 			log.Info("no demotion in getPayload, successful block proposal")
@@ -1609,7 +1607,7 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 			}
 		}
 
-		err = api.db.UpdateBuilderDemotion(convertedBidTrace, signedBeaconBlock, signedRegistration)
+		err = api.db.UpdateBuilderDemotion(bidTrace, signedBeaconBlock, signedRegistration)
 		if err != nil {
 			log.WithFields(logrus.Fields{
 				"errorWritingRefundToDB": true,
