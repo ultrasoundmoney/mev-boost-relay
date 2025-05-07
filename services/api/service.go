@@ -1526,6 +1526,7 @@ func getPayloadWithFallbacks(log *logrus.Entry, datastoreRef *datastore.Datastor
 			time.Sleep(100 * time.Millisecond)
 		}
 
+		log.Infof("Local payload check: all %d attempts completed. Final error from local: %v", 5, err)
 		// Nothing found – try to report error (best-effort, ignore if channel full)
 		select {
 		case resultCh <- result{payload: nil, err: err}:
@@ -1554,6 +1555,9 @@ func getPayloadWithFallbacks(log *logrus.Entry, datastoreRef *datastore.Datastor
 			log.WithError(err).Error("failed to get payload from Redis")
 		}
 
+		if res == nil { // Only log completion details if no payload was found
+			log.Infof("Redis payload check attempt completed. Payload found: false. Final error from Redis: %v", err)
+		}
 		select {
 		case resultCh <- result{payload: nil, err: err}:
 		default:
@@ -1582,6 +1586,9 @@ func getPayloadWithFallbacks(log *logrus.Entry, datastoreRef *datastore.Datastor
 			log.WithError(err).Error("failed to get payload from remote auction API")
 		}
 
+		if res == nil { // Only log completion details if no payload was found
+			log.Infof("Remote payload check attempt completed. Payload found: false. Final error from remote: %v", err)
+		}
 		select {
 		case resultCh <- result{payload: nil, err: err}:
 		default:
