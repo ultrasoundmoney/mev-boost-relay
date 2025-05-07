@@ -1496,14 +1496,14 @@ func getPayloadWithFallbacks(log *logrus.Entry, datastoreRef *datastore.Datastor
 
 	var wg sync.WaitGroup
 
-	// local store, 5 attempts, 100 ms apart.
+	// local store, 10 attempts, 100 ms apart.
 	// this is where we'll usually find the payload. because its possible the payload is not here yet, we retry.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		var res *builderApi.VersionedSubmitBlindedBlockResponse
 		var err error
-		for i := 0; i < 5 && ctx.Err() == nil; i++ {
+		for i := 0; i < 10 && ctx.Err() == nil; i++ {
 			res, err = datastoreRef.LocalPayloadContents(uint64(slot), proposerPubkey.String(), blockHash.String())
 			if res != nil {
 				log.Info("payload found locally")
