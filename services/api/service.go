@@ -1712,6 +1712,14 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 		api.RespondError(w, http.StatusBadRequest, "failed to get payload slot")
 		return
 	}
+
+	// Reject non-Electra payloads during Electra epoch
+	if api.isElectra(uint64(slot)) && payload.Version != spec.DataVersionElectra {
+		log.Warnf("received non-Electra payload (version %s) for slot %d after Electra epoch, rejecting", payload.Version, slot)
+		api.RespondError(w, http.StatusBadRequest, "received non-Electra payload after Electra epoch")
+		return
+	}
+
 	blockHash, err := payload.ExecutionBlockHash()
 	if err != nil {
 		log.WithError(err).Warn("failed to get payload block hash")
