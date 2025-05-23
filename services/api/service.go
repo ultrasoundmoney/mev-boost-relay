@@ -76,6 +76,7 @@ var (
 var (
 	// Proposer API (builder-specs)
 	pathStatus              = "/eth/v1/builder/status"
+	pathHealth              = "/eth/v1/builder/health"
 	pathRegisterValidator   = "/eth/v1/builder/validators"
 	pathGetHeader           = "/eth/v1/builder/header/{slot:[0-9]+}/{parent_hash:0x[a-fA-F0-9]+}/{pubkey:0x[a-fA-F0-9]+}"
 	pathGetPayload          = "/eth/v1/builder/blinded_blocks"
@@ -381,6 +382,7 @@ func (api *RelayAPI) getRouter() http.Handler {
 		r.HandleFunc(pathGetHeader, api.handleGetHeader).Methods(http.MethodGet)
 		r.HandleFunc(pathGetPayload, api.handleGetPayload).Methods(http.MethodPost)
 		r.HandleFunc(pathGetRegistrationMeta, api.handleGetRegistrationMeta).Methods(http.MethodGet)
+		r.HandleFunc(pathHealth, api.handleHealth).Methods(http.MethodGet)
 	}
 
 	// Builder API
@@ -967,6 +969,10 @@ func (api *RelayAPI) Respond(w http.ResponseWriter, code int, response any) {
 }
 
 func (api *RelayAPI) handleStatus(w http.ResponseWriter, req *http.Request) {
+	w.WriteHeader(http.StatusOK)
+}
+
+func (api *RelayAPI) handleHealth(w http.ResponseWriter, req *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
