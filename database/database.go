@@ -59,13 +59,14 @@ type Geo string
 
 const (
 	VIN Geo = "vin"
+	TYO Geo = "tyo"
 	RBX Geo = "rbx"
 )
 
 func parseGeoFromEnv() (Geo, error) {
 	geo := os.Getenv("GEO")
 	switch geo {
-	case string(VIN), string(RBX):
+	case string(TYO), string(VIN), string(RBX):
 		return Geo(geo), nil
 	default:
 		return "", fmt.Errorf("invalid GEO value: %s", geo)
