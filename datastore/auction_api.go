@@ -93,7 +93,7 @@ func (ds *Datastore) LocalPayloadContents(slot uint64, proposerPubkey, blockHash
 }
 
 func (ds *Datastore) RemotePayloadContents(slot uint64, proposerPubkey, blockHash string) (*builderApi.VersionedSubmitBlindedBlockResponse, error) {
-	return getPayloadContents(slot, proposerPubkey, blockHash, ds.remoteAuctionHost, "private", ds.auctionAuthToken, 1*time.Second)
+	return getPayloadContents(slot, proposerPubkey, blockHash, ds.remoteAuctionHost, "private", ds.auctionAuthToken, 2*time.Second)
 }
 
 func getBidTrace(slot uint64, proposerPubkey, blockHash, auctionHost, basePath, authToken string) (*common.BidTraceV2WithBlobFields, error) {
