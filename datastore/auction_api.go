@@ -16,6 +16,7 @@ import (
 	"github.com/attestantio/go-eth2-client/spec/capella"
 	"github.com/flashbots/mev-boost-relay/common"
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 )
 
 var ErrFailedToParsePayload = errors.New("failed to parse payload")
@@ -94,7 +95,7 @@ func (ds *Datastore) LocalPayloadContents(slot uint64, proposerPubkey, blockHash
 	return getPayloadContents(slot, proposerPubkey, blockHash, ds.localAuctionHost, "internal", "", 0)
 }
 
-func (ds *Datastore) RemotePayloadContents(slot uint64, proposerPubkey, blockHash string) (*builderApi.VersionedSubmitBlindedBlockResponse, error) {
+func (ds *Datastore) RemotePayloadContents(log *logrus.Entry, slot uint64, proposerPubkey, blockHash string) (*builderApi.VersionedSubmitBlindedBlockResponse, error) {
 	// Fan out to all remote auction hosts concurrently and return the first success.
 	type res struct {
 		payload *builderApi.VersionedSubmitBlindedBlockResponse
@@ -117,6 +118,19 @@ func (ds *Datastore) RemotePayloadContents(slot uint64, proposerPubkey, blockHas
 			defer wg.Done()
 			// Short timeout per host to avoid blocking.
 			payload, err := getPayloadContents(slot, proposerPubkey, blockHash, h, "private", ds.auctionAuthToken, 2*time.Second)
+			if err != nil {
+				if log != nil {
+					log.WithError(err).WithField("remoteAuctionHost", h).Info("remote payload query error")
+				}
+			} else if payload != nil {
+				if log != nil {
+					log.WithField("remoteAuctionHost", h).Info("remote payload found")
+				}
+			} else {
+				if log != nil {
+					log.WithField("remoteAuctionHost", h).Info("remote payload unknown response")
+				}
+			}
 			select {
 			case results <- res{payload: payload, err: err}:
 			case <-ctx.Done():
@@ -192,7 +206,7 @@ func (ds *Datastore) LocalBidTrace(slot uint64, proposerPubkey, blockHash string
 	return getBidTrace(slot, proposerPubkey, blockHash, ds.localAuctionHost, "internal", "")
 }
 
-func (ds *Datastore) RemoteBidTrace(slot uint64, proposerPubkey, blockHash string) (*common.BidTraceV2WithBlobFields, error) {
+func (ds *Datastore) RemoteBidTrace(log *logrus.Entry, slot uint64, proposerPubkey, blockHash string) (*common.BidTraceV2WithBlobFields, error) {
 	// Query all remote hosts concurrently and return the first found.
 	type res struct {
 		bt  *common.BidTraceV2WithBlobFields
@@ -214,6 +228,19 @@ func (ds *Datastore) RemoteBidTrace(slot uint64, proposerPubkey, blockHash strin
 		go func() {
 			defer wg.Done()
 			bt, err := getBidTrace(slot, proposerPubkey, blockHash, h, "private", ds.auctionAuthToken)
+			if err != nil {
+				if log != nil {
+					log.WithError(err).WithField("remoteAuctionHost", h).Info("remote bidTrace query error")
+				}
+			} else if bt != nil {
+				if log != nil {
+					log.WithField("remoteAuctionHost", h).Info("remote bidTrace found")
+				}
+			} else {
+				if log != nil {
+					log.WithField("remoteAuctionHost", h).Info("remote bidTrace unknown response")
+				}
+			}
 			select {
 			case results <- res{bt: bt, err: err}:
 			case <-ctx.Done():
