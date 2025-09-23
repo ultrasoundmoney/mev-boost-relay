@@ -31,7 +31,7 @@ func getPayloadContents(slot uint64, proposerPubkey, blockHash, host, basePath, 
 	fullURL := fmt.Sprintf("%s/%s/payload_contents?%s", host, basePath, queryParams.Encode())
 	req, err := http.NewRequest("GET", fullURL, nil)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to create payload contents request")
+		return nil, errors.Wrapf(err, "auction host %s: failed to create payload contents request", host)
 	}
 
 	// Add auth token if provided
@@ -41,17 +41,17 @@ func getPayloadContents(slot uint64, proposerPubkey, blockHash, host, basePath, 
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to fetch payload contents")
+		return nil, errors.Wrapf(err, "auction host %s: failed to fetch payload contents", host)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, ErrExecutionPayloadNotFound
+		return nil, errors.Wrapf(ErrExecutionPayloadNotFound, "auction host %s", host)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to read payload contents response body")
+		return nil, errors.Wrapf(err, "auction host %s: failed to read payload contents response body", host)
 	}
 
 	// Try to parse pectra contents
@@ -87,7 +87,7 @@ func getPayloadContents(slot uint64, proposerPubkey, blockHash, host, basePath, 
 		}, nil
 	}
 
-	return nil, ErrFailedToParsePayload
+	return nil, errors.Wrapf(ErrFailedToParsePayload, "auction host %s", host)
 }
 
 func (ds *Datastore) LocalPayloadContents(slot uint64, proposerPubkey, blockHash string) (*builderApi.VersionedSubmitBlindedBlockResponse, error) {
@@ -157,7 +157,7 @@ func getBidTrace(slot uint64, proposerPubkey, blockHash, auctionHost, basePath, 
 	fullURL := fmt.Sprintf("%s/%s/bid_trace?%s", auctionHost, basePath, queryParams.Encode())
 	req, err := http.NewRequest("GET", fullURL, nil)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to create bid trace request")
+		return nil, errors.Wrapf(err, "auction host %s: failed to create bid trace request", auctionHost)
 	}
 
 	if authToken != "" {
@@ -166,23 +166,23 @@ func getBidTrace(slot uint64, proposerPubkey, blockHash, auctionHost, basePath, 
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "auction host %s: failed to fetch bid trace", auctionHost)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, ErrBidTraceNotFound
+		return nil, errors.Wrapf(ErrBidTraceNotFound, "auction host %s", auctionHost)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to read bit trace response body")
+		return nil, errors.Wrapf(err, "auction host %s: failed to read bid trace response body", auctionHost)
 	}
 
 	bidtrace := new(common.BidTraceV2WithBlobFields)
 	err = json.Unmarshal(body, &bidtrace)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrapf(err, "auction host %s: failed to decode bid trace JSON", auctionHost)
 	}
 
 	return bidtrace, nil
