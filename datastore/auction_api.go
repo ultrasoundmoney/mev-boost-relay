@@ -1,11 +1,13 @@
 package datastore
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	builderApi "github.com/attestantio/go-builder-client/api"
@@ -93,7 +95,55 @@ func (ds *Datastore) LocalPayloadContents(slot uint64, proposerPubkey, blockHash
 }
 
 func (ds *Datastore) RemotePayloadContents(slot uint64, proposerPubkey, blockHash string) (*builderApi.VersionedSubmitBlindedBlockResponse, error) {
-	return getPayloadContents(slot, proposerPubkey, blockHash, ds.remoteAuctionHost, "private", ds.auctionAuthToken, 2*time.Second)
+	// Fan out to all remote auction hosts concurrently and return the first success.
+	type res struct {
+		payload *builderApi.VersionedSubmitBlindedBlockResponse
+		err     error
+	}
+
+	if len(ds.remoteAuctionHosts) == 0 {
+		return nil, ErrExecutionPayloadNotFound
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	results := make(chan res, len(ds.remoteAuctionHosts))
+	var wg sync.WaitGroup
+	for _, host := range ds.remoteAuctionHosts {
+		h := host
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// Short timeout per host to avoid blocking.
+			payload, err := getPayloadContents(slot, proposerPubkey, blockHash, h, "private", ds.auctionAuthToken, 2*time.Second)
+			select {
+			case results <- res{payload: payload, err: err}:
+			case <-ctx.Done():
+			}
+		}()
+	}
+
+	// Close results when all workers are done.
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	var lastErr error
+	for r := range results {
+		if r.payload != nil {
+			cancel()
+			return r.payload, nil
+		}
+		if r.err != nil {
+			lastErr = r.err
+		}
+	}
+	if lastErr == nil {
+		lastErr = ErrExecutionPayloadNotFound
+	}
+	return nil, lastErr
 }
 
 func getBidTrace(slot uint64, proposerPubkey, blockHash, auctionHost, basePath, authToken string) (*common.BidTraceV2WithBlobFields, error) {
@@ -143,5 +193,51 @@ func (ds *Datastore) LocalBidTrace(slot uint64, proposerPubkey, blockHash string
 }
 
 func (ds *Datastore) RemoteBidTrace(slot uint64, proposerPubkey, blockHash string) (*common.BidTraceV2WithBlobFields, error) {
-	return getBidTrace(slot, proposerPubkey, blockHash, ds.remoteAuctionHost, "private", ds.auctionAuthToken)
+	// Query all remote hosts concurrently and return the first found.
+	type res struct {
+		bt  *common.BidTraceV2WithBlobFields
+		err error
+	}
+
+	if len(ds.remoteAuctionHosts) == 0 {
+		return nil, ErrBidTraceNotFound
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	results := make(chan res, len(ds.remoteAuctionHosts))
+	var wg sync.WaitGroup
+	for _, host := range ds.remoteAuctionHosts {
+		h := host
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			bt, err := getBidTrace(slot, proposerPubkey, blockHash, h, "private", ds.auctionAuthToken)
+			select {
+			case results <- res{bt: bt, err: err}:
+			case <-ctx.Done():
+			}
+		}()
+	}
+
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	var lastErr error
+	for r := range results {
+		if r.bt != nil {
+			cancel()
+			return r.bt, nil
+		}
+		if r.err != nil {
+			lastErr = r.err
+		}
+	}
+	if lastErr == nil {
+		lastErr = ErrBidTraceNotFound
+	}
+	return nil, lastErr
 }

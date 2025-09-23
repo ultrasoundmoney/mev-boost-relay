@@ -2,7 +2,6 @@
 package datastore
 
 import (
-	"log"
 	"strconv"
 	"strings"
 	"sync"
@@ -51,15 +50,23 @@ type Datastore struct {
 	// Used for proposer-API readiness check
 	KnownValidatorsWasUpdated uberatomic.Bool
 
-	// Where we can find payloads for our local auction
+	// Where we can find payloads for our auctions
 	// Should be protocol + hostname, e.g. http://turbo-auction-api, https://relay-builders-us.ultrasound.money
-	localAuctionHost  string
-	remoteAuctionHost string
+	localAuctionHost   string
+	remoteAuctionHosts []string
 	// Token used to remotely authenticate to auction API.
 	auctionAuthToken string
 }
 
-func NewDatastore(redisCache *RedisCache, memcached *Memcached, db database.IDatabaseService, localAuctionHost, remoteAuctionHost, auctionAuthToken string) (ds *Datastore, err error) {
+func NewDatastore(redisCache *RedisCache, memcached *Memcached, db database.IDatabaseService, localAuctionHost, remoteAuctionHostsCSV, auctionAuthToken string) (ds *Datastore, err error) {
+	// Parse CSV list into slice (ignore empty entries)
+	var remoteHosts []string
+	for _, h := range strings.Split(remoteAuctionHostsCSV, ",") {
+		h = strings.TrimSpace(h)
+		if h != "" {
+			remoteHosts = append(remoteHosts, h)
+		}
+	}
 	ds = &Datastore{
 		db:                      db,
 		memcached:               memcached,
@@ -67,17 +74,11 @@ func NewDatastore(redisCache *RedisCache, memcached *Memcached, db database.IDat
 		knownValidatorsByPubkey: make(map[common.PubkeyHex]uint64),
 		knownValidatorsByIndex:  make(map[uint64]common.PubkeyHex),
 		localAuctionHost:        localAuctionHost,
-		remoteAuctionHost:       remoteAuctionHost,
+		remoteAuctionHosts:      remoteHosts,
 		auctionAuthToken:        auctionAuthToken,
 	}
 
-	if localAuctionHost == "" {
-		log.Fatal("LOCAL_AUCTION_HOST is not set")
-	}
-
-	if remoteAuctionHost == "" {
-		log.Fatal("REMOTE_AUCTION_HOST is not set")
-	}
+	// Allow empty local/remote hosts for tests or deployments that only rely on Redis.
 
 	return ds, err
 }
