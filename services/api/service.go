@@ -1576,7 +1576,7 @@ func getPayloadWithFallbacks(log *logrus.Entry, datastoreRef *datastore.Datastor
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		res, err := datastoreRef.RemotePayloadContents(uint64(slot), proposerPubkey.String(), blockHash.String())
+		res, err := datastoreRef.RemotePayloadContents(log, uint64(slot), proposerPubkey.String(), blockHash.String())
 		if res != nil {
 			log.Info("payload found remotely")
 			select {
@@ -1807,7 +1807,7 @@ func (api *RelayAPI) handleGetPayload(w http.ResponseWriter, req *http.Request) 
 	defer func() {
 		bidTrace, err := api.datastore.LocalBidTrace(uint64(slot), proposerPubkey.String(), blockHash.String())
 		if errors.Is(err, datastore.ErrBidTraceNotFound) {
-			bidTrace, err = api.datastore.RemoteBidTrace(uint64(slot), proposerPubkey.String(), blockHash.String())
+			bidTrace, err = api.datastore.RemoteBidTrace(log, uint64(slot), proposerPubkey.String(), blockHash.String())
 		}
 		if err != nil {
 			log.WithError(err).Info("failed to get bidTrace for delivered payload")
