@@ -32,9 +32,9 @@ var (
 	apiDefaultDataAPIEnabled     = os.Getenv("DISABLE_DATA_API") != "1"
 	apiDefaultProposerAPIEnabled = os.Getenv("DISABLE_PROPOSER_API") != "1"
 
-	localAuctionHost  = os.Getenv("LOCAL_AUCTION_HOST")
-	remoteAuctionHost = os.Getenv("REMOTE_AUCTION_HOST")
-	auctionAuthToken  = os.Getenv("AUCTION_AUTH_TOKEN")
+	localAuctionHost      = os.Getenv("LOCAL_AUCTION_HOST")
+	remoteAuctionHostsEnv = os.Getenv("REMOTE_AUCTION_HOSTS") // comma-separated list of remote auction hosts
+	auctionAuthToken      = os.Getenv("AUCTION_AUTH_TOKEN")
 
 	apiListenAddr   string
 	apiPprofEnabled bool
@@ -156,7 +156,23 @@ var apiCmd = &cobra.Command{
 		}
 
 		log.Info("Setting up datastore...")
-		ds, err := datastore.NewDatastore(redis, mem, db, localAuctionHost, remoteAuctionHost, auctionAuthToken)
+
+		// Optionally log configured remote auction hosts
+		if remoteAuctionHostsEnv != "" {
+			// Sanitize for readability
+			var hs []string
+			for _, h := range strings.Split(remoteAuctionHostsEnv, ",") {
+				h = strings.TrimSpace(h)
+				if h != "" {
+					hs = append(hs, h)
+				}
+			}
+			if len(hs) > 0 {
+				log.Infof("Using remote auction hosts: %s", strings.Join(hs, ", "))
+			}
+		}
+
+		ds, err := datastore.NewDatastore(redis, mem, db, localAuctionHost, remoteAuctionHostsEnv, auctionAuthToken)
 		if err != nil {
 			log.WithError(err).Fatalf("Failed setting up prod datastore")
 		}
